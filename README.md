@@ -17,7 +17,7 @@ Node runs the TypeScript as-is.
 
 ```bash
 npm install
-npm test                      # 65 tests, fully offline
+npm test                      # 62 tests, fully offline
 RUN_NETWORK_TESTS=1 npm test  # also verifies the live EU trust lists
 npm start                     # http://localhost:3000
 ```
