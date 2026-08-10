@@ -17,7 +17,7 @@ Node runs the TypeScript as-is.
 
 ```bash
 npm install
-npm test                      # 76 tests, fully offline
+npm test                      # 81 tests, fully offline
 RUN_NETWORK_TESTS=1 npm test  # also verifies the live EU trust lists
 npm start                     # http://localhost:3000
 ```
@@ -70,6 +70,7 @@ src/trust/issuer-key.ts   x5c resolution + chain validation   <- the part no lib
 src/trust/lotl.ts         ETSI TS 119 612 trust list client   <- no Node implementation existed
 src/trust/status.ts       Token Status List revocation
 src/mdoc/verify.ts        ISO 18013-5 mdoc, through the same trust layer
+src/mdoc/device-response.ts     DeviceResponse + device authentication
 src/mdoc/cose.ts          COSE_Sign1 verification
 src/mdoc/session-transcript.ts  the OID4VP handover a device signature commits to
 src/oid4vp/identity.ts    who this verifier is on the wire
@@ -190,6 +191,36 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 - **Sessions are in memory** in the demo app. Restarting drops them, and more
   than one instance breaks them. The library holds no state.
 - **ES256 only**, matching what the reference issuer advertises.
+
+## mdoc
+
+`verifyMdoc` checks an issued `IssuerSigned`; `verifyDeviceResponse` checks what
+a wallet actually sends. Both run issuer identity through the same
+`TrustAnchors` and path validation as SD-JWT VC — mdoc carries its chain in a
+COSE `x5chain` header rather than a JOSE `x5c`, and that is the only difference
+that reaches the trust code.
+
+A DeviceResponse carries two independent signatures. **issuerAuth** proves the
+issuer attested the claims; **deviceSignature** proves the wallet holds the key
+the issuer bound them to, and produced this response for *this* request. The
+second is why a stolen credential is not enough: it signs a
+`DeviceAuthentication` structure containing the OID4VP session transcript, which
+commits to our client identifier, nonce and response URI. Tests assert that a
+response replayed at another verifier, bound to a nonce we never issued, or
+signed by a different key, is rejected.
+
+Two things the real reference credential taught us, both pinned by tests:
+
+- **Its mdoc PID carries no age information at all** — no `birth_date`, no
+  `age_over_18` — so the predicate cannot be satisfied from it, even though the
+  same form submission produced a `birthdate` in the SD-JWT VC.
+- **Its `validUntil` is not valid RFC 3339** (`...+00:00Z`, carrying both an
+  offset and a `Z`; upstream issue #177). Rejected by default, with an explicit
+  opt-out, because a validity window that cannot be read is not one.
+
+Device MAC authentication is not implemented: it needs an ECDH session key that
+OID4VP over redirects never establishes, so its presence is a rejection rather
+than a gap.
 
 ## Revocation
 

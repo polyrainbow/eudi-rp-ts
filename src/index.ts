@@ -44,6 +44,8 @@ export { verifyMdoc } from './mdoc/verify.ts';
 export type { MdocVerifyOptions, VerifiedMdoc } from './mdoc/verify.ts';
 export { parseCoseSign1, verifyCoseSign1, coseAlg, coseX5Chain, coseKeyToPublicKey } from './mdoc/cose.ts';
 export type { CoseSign1 } from './mdoc/cose.ts';
+export { verifyDeviceResponse } from './mdoc/device-response.ts';
+export type { DeviceResponseOptions, VerifiedDeviceResponse } from './mdoc/device-response.ts';
 export { buildSessionTranscript, jwkThumbprint } from './mdoc/session-transcript.ts';
 export type { HandoverParameters } from './mdoc/session-transcript.ts';
 

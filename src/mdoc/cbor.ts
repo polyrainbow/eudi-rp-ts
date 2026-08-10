@@ -63,4 +63,23 @@ export function toBytes(value: unknown): Uint8Array {
   throw new Error('Expected a CBOR byte string');
 }
 
+/**
+ * Encode `#6.24(bstr)` — a CBOR tag 24 wrapping a byte string.
+ *
+ * mdoc uses this wrapper wherever one structure embeds another's exact bytes:
+ * IssuerSignedItemBytes, MobileSecurityObjectBytes, DeviceNameSpacesBytes.
+ * Rebuilding it by hand matters because digests and signatures cover the
+ * wrapped encoding, so re-serialising the decoded value would not reproduce it.
+ */
+export function encodeTag24(contents: Uint8Array): Uint8Array {
+  const length = contents.length;
+  let header: number[];
+  if (length < 24) header = [0x40 + length];
+  else if (length < 0x100) header = [0x58, length];
+  else if (length < 0x10000) header = [0x59, length >> 8, length & 0xff];
+  else header = [0x5a, (length >>> 24) & 0xff, (length >> 16) & 0xff, (length >> 8) & 0xff, length & 0xff];
+
+  return Uint8Array.from([0xd8, 0x18, ...header, ...contents]);
+}
+
 export { decode, encode };

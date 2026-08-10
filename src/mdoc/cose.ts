@@ -16,7 +16,13 @@ export type CoseSign1 = {
   protectedBytes: Uint8Array;
   protectedHeader: Map<number, unknown> | Record<string, unknown>;
   unprotectedHeader: unknown;
-  payload: Uint8Array;
+  /**
+   * The signed payload, or null when detached.
+   *
+   * mdoc's device signature is detached: the structure carries null and the
+   * verifier reconstructs DeviceAuthenticationBytes. Issuer auth is not.
+   */
+  payload: Uint8Array | null;
   signature: Uint8Array;
 };
 
@@ -38,7 +44,7 @@ export function parseCoseSign1(value: unknown): CoseSign1 {
     // An empty protected header encodes as a zero-length string, not as a map.
     protectedHeader: protectedBytes.length === 0 ? new Map() : (decode(protectedBytes) as Map<number, unknown>),
     unprotectedHeader: array[1],
-    payload: toBytes(array[2]),
+    payload: array[2] === null || array[2] === undefined ? null : toBytes(array[2]),
     signature: toBytes(array[3]),
   };
 }
@@ -75,6 +81,10 @@ export function verifyCoseSign1(
   alg: JwsAlg,
   externalAad: Uint8Array = new Uint8Array(0),
 ): boolean {
+  // A detached payload has to be supplied by the caller before verifying;
+  // there is nothing to check a signature against otherwise.
+  if (sign1.payload === null) return false;
+
   const sigStructure = encode(['Signature1', sign1.protectedBytes, externalAad, sign1.payload]);
 
   // COSE carries ECDSA signatures as raw R||S, the same as JWS, so the existing

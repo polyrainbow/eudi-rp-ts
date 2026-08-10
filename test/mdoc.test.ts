@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { decode, encode, get } from '../src/mdoc/cbor.ts';
 import { coseAlg, coseX5Chain, parseCoseSign1, verifyCoseSign1 } from '../src/mdoc/cose.ts';
 import { buildSessionTranscript, jwkThumbprint } from '../src/mdoc/session-transcript.ts';
+import { verifyDeviceResponse } from '../src/mdoc/device-response.ts';
 import { verifyMdoc } from '../src/mdoc/verify.ts';
+import { buildDeviceResponse } from './mdoc-wallet.ts';
 import { evaluateAgeOver18Mdoc } from '../src/predicate/age.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 
@@ -183,5 +185,96 @@ describe('OID4VP session transcript', () => {
 
     assert.equal(a.length, 32);
     assert.deepEqual(a, b, 'member order in the input must not affect the thumbprint');
+  });
+});
+
+describe('device authentication', () => {
+  const devicePrivateJwk = JSON.parse(readFileSync(`${dir}mdoc-device-private-jwk.json`, 'utf8'));
+  const request = {
+    clientId: 'x509_san_dns:verifier.example',
+    nonce: 'n-0S6_WzA2Mj',
+    responseUri: 'https://verifier.example/oid4vp/response',
+  };
+  const sessionTranscript = buildSessionTranscript(request);
+  const verifierOptions = {
+    anchors,
+    sessionTranscript,
+    expectedDocType: 'eu.europa.ec.eudi.pid.1',
+    tolerateMalformedValidityDates: true,
+    now: NOW,
+  };
+  const present = (overrides = {}) =>
+    buildDeviceResponse({
+      issuerSigned,
+      devicePrivateJwk,
+      sessionTranscript,
+      docType: 'eu.europa.ec.eudi.pid.1',
+      ...overrides,
+    });
+
+  it('accepts a response signed by the bound device key', async () => {
+    const result = await verifyDeviceResponse({ ...verifierOptions, deviceResponse: present() });
+
+    assert.equal(result.verified, true, JSON.stringify(result));
+    assert.equal(result.value.docType, 'eu.europa.ec.eudi.pid.1');
+    assert.equal(result.value.claims['eu.europa.ec.eudi.pid.1']?.['family_name'], 'Tester');
+  });
+
+  it('rejects a response replayed at a different verifier', async () => {
+    // The device signature commits to the session transcript, which commits to
+    // the client id, nonce and response URI. This is the property that makes a
+    // captured response useless to anyone else.
+    const elsewhere = buildSessionTranscript({
+      clientId: 'x509_san_dns:attacker.example',
+      nonce: request.nonce,
+      responseUri: 'https://attacker.example/collect',
+    });
+
+    const result = await verifyDeviceResponse({
+      ...verifierOptions,
+      sessionTranscript: elsewhere,
+      deviceResponse: present(),
+    });
+
+    assert.equal(result.verified, false);
+    assert.equal(result.reason, 'KEY_BINDING_INVALID');
+  });
+
+  it('rejects a response bound to a nonce we never issued', async () => {
+    const result = await verifyDeviceResponse({
+      ...verifierOptions,
+      deviceResponse: present({
+        signOverTranscript: buildSessionTranscript({ ...request, nonce: 'some-other-nonce' }),
+      }),
+    });
+
+    assert.equal(result.verified, false);
+    assert.equal(result.reason, 'KEY_BINDING_INVALID');
+  });
+
+  it('rejects a response signed by the wrong device key', async () => {
+    // Issuer signature and digests are untouched; only the holder is wrong.
+    const { generateKeyPairSync } = await import('node:crypto');
+    const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const impostor = privateKey.export({ format: 'jwk' });
+
+    const result = await verifyDeviceResponse({
+      ...verifierOptions,
+      deviceResponse: present({ devicePrivateJwk: impostor }),
+    });
+
+    assert.equal(result.verified, false);
+    assert.equal(result.reason, 'KEY_BINDING_INVALID');
+  });
+
+  it('still enforces issuer trust', async () => {
+    const result = await verifyDeviceResponse({
+      ...verifierOptions,
+      anchors: ourAnchors,
+      deviceResponse: present(),
+    });
+
+    assert.equal(result.verified, false);
+    assert.equal(result.reason, 'ISSUER_UNTRUSTED');
   });
 });

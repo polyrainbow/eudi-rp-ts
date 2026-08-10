@@ -3,7 +3,7 @@ import { DEFAULT_ALLOWED_ALGS, type JwsAlg } from '../crypto.ts';
 import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
 import { type PathValidationOptions, resolveIssuerCertificateChain } from '../trust/issuer-key.ts';
-import { decode, decodeEmbedded, entriesOf, get, toBytes, untag } from './cbor.ts';
+import { decode, decodeEmbedded, encodeTag24, entriesOf, get, toBytes, untag } from './cbor.ts';
 import { coseAlg, coseX5Chain, parseCoseSign1, verifyCoseSign1 } from './cose.ts';
 
 /**
@@ -100,6 +100,9 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
   }
 
   // MobileSecurityObjectBytes is `#6.24(bstr .cbor MobileSecurityObject)`.
+  if (sign1.payload === null) {
+    return reject('CREDENTIAL_MALFORMED', 'issuerAuth has a detached payload');
+  }
   let mso: unknown;
   try {
     mso = decodeEmbedded(untag(decode(sign1.payload)));
@@ -200,8 +203,7 @@ function checkDigests(
       }
 
       // Re-encode the tag so the hash covers the same bytes the issuer hashed.
-      const taggedBytes = Buffer.concat([Buffer.from([0xd8, 0x18]), encodeByteString(itemBytes)]);
-      const actual = createHash(nodeDigest).update(taggedBytes).digest();
+      const actual = createHash(nodeDigest).update(encodeTag24(itemBytes)).digest();
       if (!actual.equals(Buffer.from(toBytes(committed)))) {
         return reject('CREDENTIAL_MALFORMED', `Digest mismatch for element ${identifier}`);
       }
@@ -212,17 +214,6 @@ function checkDigests(
   }
 
   return accept(claims);
-}
-
-/** CBOR byte string header plus contents, for rebuilding IssuerSignedItemBytes. */
-function encodeByteString(bytes: Uint8Array): Buffer {
-  const length = bytes.length;
-  let header: Buffer;
-  if (length < 24) header = Buffer.from([0x40 + length]);
-  else if (length < 0x100) header = Buffer.from([0x58, length]);
-  else if (length < 0x10000) header = Buffer.from([0x59, length >> 8, length & 0xff]);
-  else header = Buffer.from([0x5a, (length >> 24) & 0xff, (length >> 16) & 0xff, (length >> 8) & 0xff, length & 0xff]);
-  return Buffer.concat([header, Buffer.from(bytes)]);
 }
 
 type Validity = { ok: boolean; detail: string; signed?: Date; validFrom?: Date; validUntil?: Date };
