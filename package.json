@@ -52,5 +52,13 @@
     "NOTICE",
     "GLOSSARY.md",
     "SECURITY.md"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/polyrainbow/eudi-rp-ts.git"
+  },
+  "bugs": {
+    "url": "https://github.com/polyrainbow/eudi-rp-ts/issues"
+  },
+  "homepage": "https://github.com/polyrainbow/eudi-rp-ts#readme"
 }
