@@ -170,6 +170,35 @@ All handled in `src/`; all easy to get wrong by assuming otherwise.
   deployment — which is why the EU's own trust validator makes the list location
   a per-provider setting. `LOTL_URL` exists for exactly that reason.
 
+## Deploying
+
+A wallet on a phone needs to reach `response_uri` over public https, so a real
+test needs a deployment. `fly.toml` is included and uses the `Dockerfile`
+unchanged:
+
+```bash
+fly launch --no-deploy --copy-config --name <your-app>
+fly secrets set BASE_URL=https://<your-app>.fly.dev
+fly deploy
+```
+
+Any Docker host works the same way — Render, Railway, a VPS. The only two things
+that matter are that `BASE_URL` is the public https URL and that the container
+can reach the internet if you use `TRUST_MODE=lotl`.
+
+Serverless platforms (Netlify, Vercel, Lambda) need code changes first: sessions
+live in an in-memory `Map`, so an ephemeral function would answer every
+presentation with `SESSION_UNKNOWN`. `SessionStore` is behind a small interface
+specifically so it can be swapped for a KV store, but that work isn't done.
+
+Two things to expect on a fresh deployment:
+
+- **`TRUST_MODE=pinned` with the demo anchor rejects every real credential** with
+  `ISSUER_UNTRUSTED`. That is correct behaviour — the fixture CA is a throwaway.
+  Point `TRUST_ANCHORS_FILE` at the issuer's real anchor, or switch to `lotl`.
+- **Sessions are lost if the machine restarts.** `fly.toml` sets
+  `min_machines_running = 1` and disables auto-stop for that reason.
+
 ## Testing against a real wallet
 
 Not yet done. `npm test` proves the logic against a simulated wallet and

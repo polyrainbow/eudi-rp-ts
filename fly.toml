@@ -1,0 +1,49 @@
+# Fly.io deployment. Uses the Dockerfile as-is — no code changes.
+#
+#   fly launch --no-deploy --copy-config --name <your-app>
+#   fly secrets set BASE_URL=https://<your-app>.fly.dev
+#   fly deploy
+#
+# Fly terminates TLS and gives you https://<your-app>.fly.dev, which is what
+# BASE_URL needs to be: OpenID4VP requires an https `response_uri`, and the
+# wallet has to reach it from the public internet.
+
+app = "eudi-rp-ts"
+primary_region = "fra"
+
+[build]
+
+[env]
+  PORT = "3000"
+
+  # Set BASE_URL as a secret (above) so it tracks your actual app name.
+  # Everything below is safe to keep in the repo.
+
+  WALLET_SCHEME = "haip-vp://"
+  REQUESTED_VCT = "urn:eudi:pid:1"
+  CLIENT_ID_PREFIX = "redirect_uri"
+
+  # DEMO ANCHOR: the throwaway CA from test/fixtures. Real credentials will be
+  # rejected with ISSUER_UNTRUSTED until you change this — which is the correct
+  # behaviour, not a bug. See "Deploying" in the README.
+  TRUST_MODE = "pinned"
+  TRUST_ANCHORS_FILE = "/app/test/fixtures/trust-anchor.pem"
+
+  # TRUST_MODE=lotl also works here (no serverless timeout to worry about), but
+  # it fetches at boot. Narrow it or startup takes minutes:
+  #   TRUST_MODE = "lotl"
+  #   LOTL_TERRITORIES = "DE,AT"
+  #   LOTL_SERVICE_TYPES = "http://uri.etsi.org/TrstSvc/Svctype/CA/QC"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_start_machines = true
+  # Sessions live in memory, so a machine that stops mid-flow loses them. Keep
+  # one running rather than debugging phantom SESSION_UNKNOWN responses.
+  auto_stop_machines = "off"
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
