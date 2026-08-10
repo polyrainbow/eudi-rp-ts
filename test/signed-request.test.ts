@@ -29,7 +29,7 @@ before(async () => {
   const config: Config = {
     port: 0,
     baseUrl: `https://${DNS_NAME}`,
-    walletScheme: 'haip-vp://',
+    walletScheme: 'eudi-openid4vp://',
     clientIdPrefix: 'x509_san_dns',
     clientDnsName: DNS_NAME,
     accessCertificateChainPem: cert.chainPem,
@@ -59,7 +59,7 @@ async function startSession() {
   const response = await fetch(`${localUrl}/presentations`, { method: 'POST' });
   assert.equal(response.status, 201);
   const body = (await response.json()) as { id: string; walletUri: string; qrCodeDataUri: string };
-  const params = new URL(body.walletUri.replace('haip-vp://', 'https://w.invalid/')).searchParams;
+  const params = new URL(body.walletUri.replace('eudi-openid4vp://', 'https://w.invalid/')).searchParams;
   return { ...body, params };
 }
 

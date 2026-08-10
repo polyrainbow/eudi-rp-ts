@@ -25,7 +25,7 @@ before(async () => {
   config = {
     port: 0,
     baseUrl: PUBLIC_BASE,
-    walletScheme: 'haip-vp://',
+    walletScheme: 'eudi-openid4vp://',
     clientIdPrefix: 'redirect_uri',
     clientDnsName: undefined,
     accessCertificateChainPem: undefined,
@@ -60,7 +60,7 @@ async function startSession() {
 
 /** Pull the request parameters back out of the URI we hand to the wallet. */
 function requestParams(walletUri: string): URLSearchParams {
-  return new URL(walletUri.replace('haip-vp://', 'https://wallet.invalid/')).searchParams;
+  return new URL(walletUri.replace('eudi-openid4vp://', 'https://wallet.invalid/')).searchParams;
 }
 
 /** Post as the wallet would, to the per-session response URI. */
