@@ -93,7 +93,13 @@ describe('OID4VP round trip', () => {
     assert.equal(query.credentials[0].id, CREDENTIAL_QUERY_ID);
     assert.equal(query.credentials[0].format, 'dc+sd-jwt');
     assert.deepEqual(query.credentials[0].meta.vct_values, ['urn:eudi:pid:1']);
-    assert.deepEqual(query.credentials[0].claims, [{ path: ['age_equal_or_over', '18'] }]);
+    // Two acceptable answers, ranked. Asking only for age_equal_or_over.18
+    // matches nothing from the real EU issuer, which emits no age attribute.
+    assert.deepEqual(query.credentials[0].claims, [
+      { id: 'age_equal_or_over_18', path: ['age_equal_or_over', '18'] },
+      { id: 'birthdate', path: ['birthdate'] },
+    ]);
+    assert.deepEqual(query.credentials[0].claim_sets, [['age_equal_or_over_18'], ['birthdate']]);
   });
 
   it('verifies a presentation from a wallet end to end', async () => {

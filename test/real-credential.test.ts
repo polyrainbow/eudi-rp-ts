@@ -72,3 +72,86 @@ describe('real EUDI reference credential', () => {
     assert.equal(evaluateAgeOver18(claims, new Date('2008-06-12T00:00:00Z')).verified, true);
   });
 });
+
+/**
+ * The real credential can only satisfy the second `claim_sets` option, since
+ * the reference issuer emits no age attribute. This is the case that a
+ * single-path DCQL query could not have matched at all.
+ */
+const expiresAt = new Date(
+  JSON.parse(Buffer.from(credential.split('~')[0]!.split('.')[1]!, 'base64url').toString()).exp * 1000,
+);
+const expired = Date.now() > expiresAt.getTime();
+
+describe('real credential over OID4VP', { skip: expired ? `credential expired ${expiresAt.toISOString().slice(0, 10)}` : false }, () => {
+  it('is accepted end to end, disclosing only birthdate', async () => {
+    const { createVerifierServer } = await import('../src/http/server.ts');
+    const { presentAgeOver18 } = await import('./wallet.ts');
+    const holderPrivateJwk = JSON.parse(readFileSync(`${dir}holder-private-jwk.json`, 'utf8'));
+
+    const config = {
+      port: 0,
+      baseUrl: 'https://verifier.test',
+      walletScheme: 'eudi-openid4vp://',
+      clientIdPrefix: 'redirect_uri' as const,
+      clientDnsName: undefined,
+      accessCertificateChainPem: undefined,
+      accessCertificatePrivateKeyPem: undefined,
+      requestedVct: 'urn:eudi:pid:1',
+      requestTtlSeconds: 300,
+      trust: {
+        mode: 'pinned' as const,
+        pinnedAnchorsPem: undefined,
+        lotlUrl: '',
+        serviceTypes: [],
+        territories: [],
+        lotlSigningAnchorsPem: undefined,
+        insecureSkipSignatureCheck: false,
+      },
+    };
+
+    const server = createVerifierServer(config, anchors);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('node:net').AddressInfo).port;
+    const local = `http://127.0.0.1:${port}`;
+
+    try {
+      const created = (await (await fetch(`${local}/presentations`, { method: 'POST' })).json()) as {
+        id: string;
+        walletUri: string;
+      };
+      const params = new URL(
+        created.walletUri.replace('eudi-openid4vp://', 'https://w.invalid/'),
+      ).searchParams;
+
+      // A wallet holding this credential can only offer birthdate.
+      const presentation = await presentAgeOver18({
+        issuedCredential: credential,
+        holderPrivateJwk,
+        nonce: params.get('nonce')!,
+        audience: params.get('client_id')!,
+        presentationFrame: { birthdate: true },
+      });
+
+      const posted = await fetch(params.get('response_uri')!.replace('https://verifier.test', local), {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          vp_token: JSON.stringify({ age_over_18: [presentation] }),
+          state: params.get('state')!,
+        }),
+      });
+      assert.equal(posted.status, 200);
+
+      const outcome = (await (await fetch(`${local}/presentations/${created.id}`)).json()) as {
+        status: string;
+        result: Record<string, unknown>;
+      };
+      assert.equal(outcome.status, 'verified', JSON.stringify(outcome));
+      assert.equal(outcome.result['evidence'], 'birthdate');
+      assert.equal(outcome.result['vct'], 'urn:eudi:pid:1');
+    } finally {
+      server.close();
+    }
+  });
+});

@@ -10,6 +10,12 @@ identity provider.
 |---|---|
 | `eudiw-pid-sd-jwt-vc.txt` | The issued credential, no Key Binding JWT (it was never presented) |
 | `eudiw-pid-issuer-ca.pem` | `CN=PID Issuer CA - UT 02`, fetched from the leaf's AIA extension |
+| `holder-private-jwk.json` | The throwaway P-256 key the credential is bound to (`cnf.jwk`) |
+
+The private key is committed deliberately. It was generated solely to request
+this credential and exists nowhere else; publishing it lets the test suite mint
+Key Binding JWTs and run a genuine credential through the full presentation
+path. It protects nothing.
 
 The subject data is synthetic — "Test Tester", born 1990-06-12, PT — entered
 into the issuer's own test form. The issuer is a testing issuer and says so on

@@ -4,15 +4,32 @@
  * DCQL (Digital Credentials Query Language) is OID4VP 1.0's replacement for
  * Presentation Exchange. Shape per OID4VP 1.0 §6 and Appendix B.3.5:
  *
- *   { credentials: [ { id, format, meta: { vct_values }, claims: [ { path } ] } ] }
+ *   { credentials: [ { id, format, meta: { vct_values }, claims, claim_sets } ] }
  *
- * `path` is an array walking into the claim structure, so the EUDI PID Rulebook's
- * `age_equal_or_over.18` is `["age_equal_or_over", "18"]`. Asking for that path
- * specifically — rather than for the whole `age_equal_or_over` object or for
- * `birthdate` — is what keeps the wallet from over-disclosing.
+ * `path` walks into the claim structure, so the EUDI PID Rulebook's
+ * `age_equal_or_over.18` is `["age_equal_or_over", "18"]`.
  */
 export const CREDENTIAL_QUERY_ID = 'age_over_18';
 
+/** Claim ids, referenced from `claim_sets`. */
+const AGE_FLAG = 'age_equal_or_over_18';
+const BIRTHDATE = 'birthdate';
+
+/**
+ * Two ways to satisfy the request, in order of preference.
+ *
+ * Asking only for `age_equal_or_over.18` matches nothing from the EU reference
+ * issuer, which emits no age attribute at all — PID Rulebook v1.1 removed them
+ * per CIR 2024/2977. OID4VP 1.0 §6.4.1: with `claims` present and `claim_sets`
+ * absent the Verifier requests *all* listed claims, so a single-path query is
+ * unsatisfiable against a real PID and the wallet returns nothing.
+ *
+ * `claim_sets` expresses preference instead — "the Wallet SHOULD return the
+ * first option that it can satisfy". So we ask for the privacy-preserving
+ * boolean first and accept a full date of birth only from a wallet that cannot
+ * provide it. That ordering is the whole point: `birthdate` discloses far more
+ * than the question we asked, and should never be the first choice.
+ */
 export function ageOver18Query(vct: string) {
   return {
     credentials: [
@@ -23,7 +40,11 @@ export function ageOver18Query(vct: string) {
         // Requires the wallet to return an SD-JWT+KB, so the presentation is
         // bound to the holder's key and to our nonce (OID4VP 1.0 Appendix B.3).
         require_cryptographic_holder_binding: true,
-        claims: [{ path: ['age_equal_or_over', '18'] }],
+        claims: [
+          { id: AGE_FLAG, path: ['age_equal_or_over', '18'] },
+          { id: BIRTHDATE, path: ['birthdate'] },
+        ],
+        claim_sets: [[AGE_FLAG], [BIRTHDATE]],
       },
     ],
   } as const;
