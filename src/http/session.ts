@@ -21,6 +21,8 @@ export type Session = {
   requestPayload: Record<string, unknown>;
   /** Ephemeral private key for `direct_post.jwt` response decryption. */
   decryptionJwk: JWK | undefined;
+  /** Signed request object, fetched by the wallet from `request_uri`. */
+  requestObject: { id: string; jwt: string } | undefined;
   expiresAt: number;
   status: SessionStatus;
   result:
@@ -32,12 +34,14 @@ export type Session = {
 export class SessionStore {
   readonly #sessions = new Map<string, Session>();
   readonly #byState = new Map<string, string>();
+  readonly #byRequestObjectId = new Map<string, string>();
 
   create(input: Omit<Session, 'id' | 'status' | 'result'>): Session {
     this.#evictExpired();
     const session: Session = { ...input, id: randomUUID(), status: 'pending', result: undefined };
     this.#sessions.set(session.id, session);
     this.#byState.set(session.state, session.id);
+    if (session.requestObject) this.#byRequestObjectId.set(session.requestObject.id, session.id);
     return session;
   }
 
@@ -49,6 +53,12 @@ export class SessionStore {
   /** Look a session up by the `state` the wallet echoes back. */
   getByState(state: string): Session | undefined {
     const id = this.#byState.get(state);
+    return id === undefined ? undefined : this.get(id);
+  }
+
+  /** Look a session up by the id in its `request_uri`. */
+  getByRequestObjectId(requestObjectId: string): Session | undefined {
+    const id = this.#byRequestObjectId.get(requestObjectId);
     return id === undefined ? undefined : this.get(id);
   }
 
@@ -65,6 +75,7 @@ export class SessionStore {
       if (session.expiresAt <= now) {
         this.#sessions.delete(id);
         this.#byState.delete(session.state);
+        if (session.requestObject) this.#byRequestObjectId.delete(session.requestObject.id);
       }
     }
   }

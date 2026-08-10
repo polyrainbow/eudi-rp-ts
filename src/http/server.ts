@@ -45,6 +45,7 @@ export function createVerifierServer(config: Config, anchors: TrustAnchors) {
         state: request.state,
         requestPayload: request.requestPayload,
         decryptionJwk: request.decryptionJwk,
+        requestObject: request.requestObject,
         expiresAt: Date.now() + config.requestTtlSeconds * 1000,
       });
       json(res, 201, {
@@ -53,6 +54,22 @@ export function createVerifierServer(config: Config, anchors: TrustAnchors) {
         qrCodeDataUri: await QRCode.toDataURL(request.walletUri, { errorCorrectionLevel: 'M', margin: 1 }),
         expiresAt: new Date(session.expiresAt).toISOString(),
       });
+      return;
+    }
+
+    // The wallet dereferences `request_uri` to fetch the signed request object.
+    // It is served by reference rather than embedded in the QR because the x5c
+    // chain makes the request far too large to encode.
+    const requestObject = /^\/oid4vp\/request\/([\w-]+)$/.exec(path);
+    if (req.method === 'GET' && requestObject) {
+      const session = sessions.getByRequestObjectId(requestObject[1]!);
+      if (!session?.requestObject) {
+        json(res, 404, { error: 'invalid_request_uri' });
+        return;
+      }
+      // RFC 9101 media type for a JWT-Secured Authorization Request.
+      res.writeHead(200, { 'content-type': 'application/oauth-authz-req+jwt' });
+      res.end(session.requestObject.jwt);
       return;
     }
 

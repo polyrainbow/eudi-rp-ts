@@ -211,9 +211,52 @@ live EU lists. **Neither proves interoperability with the EUDI reference
 wallet** — that needs a public https deployment, an access certificate the
 wallet trusts, and a credential from `issuer.eudiw.dev`.
 
-To attempt it: set `CLIENT_ID_PREFIX=x509_san_dns`, supply the access
+To attempt it: set `CLIENT_ID_PREFIX=x509_san_dns`, supply an access
 certificate, set `BASE_URL` to your tunnel, and point `WALLET_SCHEME` at the
 wallet's scheme.
+
+### Access certificates
+
+Two different things go by this name, and only one of them is something you can
+generate.
+
+**A real Wallet Relying Party Access Certificate (RPAC)** is *issued to you*.
+You register with your Member State's Relying Party Registrar, and a Relying
+Party Access CA issues the certificate, chaining to that Member State's Trusted
+List. It carries your relying party identifier and the set of attributes you are
+authorised to request. There is no way to mint one yourself — that is the point
+of it.
+
+**A development certificate** is enough to exercise the code path:
+
+```bash
+npm run access-cert -- verifier.example.org
+```
+
+That writes `config/access-cert-{key,chain}.pem` plus `config/access-ca.pem`.
+It is an EC P-256 leaf with a `dNSName` SAN matching the name you pass —
+which is what OID4VP 1.0 §5.10 requires — under a throwaway CA.
+
+```bash
+CLIENT_ID_PREFIX=x509_san_dns \
+CLIENT_DNS_NAME=verifier.example.org \
+BASE_URL=https://verifier.example.org \
+ACCESS_CERT_CHAIN_FILE=config/access-cert-chain.pem \
+ACCESS_CERT_KEY_FILE=config/access-cert-key.pem \
+npm start
+```
+
+A real wallet validates the chain, so it will reject this unless you add
+`config/access-ca.pem` to that wallet's trust store. Use it to test your own
+wallet build, or the simulated wallet in `test/wallet.ts` — not to get past a
+production one.
+
+**With a signed request the QR code holds only a reference.** A JAR carries the
+whole `x5c` chain, which is well past what a QR code can encode — embedding it
+by value fails outright. So the request object is served from
+`GET /oid4vp/request/:id` as `application/oauth-authz-req+jwt` and the QR holds
+just `client_id` and `request_uri`. Signed requests also switch the response to
+`direct_post.jwt`, encrypted to a per-session ephemeral key.
 
 ## Fixtures
 

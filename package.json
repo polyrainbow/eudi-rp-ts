@@ -8,7 +8,8 @@
     "fixtures": "node scripts/make-fixtures.ts",
     "typecheck": "tsc",
     "probe": "node scripts/probe-reference-issuer.ts",
-    "start": "node src/main.ts"
+    "start": "node src/main.ts",
+    "access-cert": "node scripts/make-access-cert.ts"
   },
   "keywords": [],
   "author": "",

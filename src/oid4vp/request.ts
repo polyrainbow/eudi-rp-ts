@@ -15,6 +15,11 @@ export type BuiltRequest = {
   decryptionJwk: JWK | undefined;
   /** The URI handed to the wallet, as a QR code and as a deep link. */
   walletUri: string;
+  /**
+   * Signed request object, served at `/oid4vp/request/:id` for the wallet to
+   * fetch. Only set when the request is signed.
+   */
+  requestObject: { id: string; jwt: string } | undefined;
 };
 
 /**
@@ -88,6 +93,12 @@ export async function buildAuthorizationRequest(config: Config): Promise<BuiltRe
     } as never,
   });
 
+  // A signed request object carries the whole x5c chain, which is far past what
+  // a QR code can hold — passing it by value produces an unscannable code. So
+  // the request is served from `request_uri` and the QR holds only a short URL
+  // plus the client_id (OID4VP 1.0 §5.10).
+  const requestObjectId = signed ? b64url(generateRandom(16)) : undefined;
+
   const created = await verifier.createOpenId4vpAuthorizationRequest({
     scheme: config.walletScheme,
     authorizationRequestPayload: requestPayload as never,
@@ -96,10 +107,14 @@ export async function buildAuthorizationRequest(config: Config): Promise<BuiltRe
           jar: {
             jwtSigner: { method: 'x5c', alg: 'ES256', x5c: pemChainToBase64Der(config.accessCertificateChainPem!) },
             expiresInSeconds: config.requestTtlSeconds,
+            requestUri: `${config.baseUrl}/oid4vp/request/${requestObjectId}`,
           } as never,
         }
       : {}),
   });
+
+  const requestObjectJwt = (created.jar as { authorizationRequestJwt?: string } | undefined)
+    ?.authorizationRequestJwt;
 
   return {
     nonce,
@@ -107,6 +122,8 @@ export async function buildAuthorizationRequest(config: Config): Promise<BuiltRe
     requestPayload: created.authorizationRequestPayload as Record<string, unknown>,
     decryptionJwk,
     walletUri: created.authorizationRequest,
+    requestObject:
+      requestObjectId && requestObjectJwt ? { id: requestObjectId, jwt: requestObjectJwt } : undefined,
   };
 }
 
