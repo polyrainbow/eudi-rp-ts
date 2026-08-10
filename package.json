@@ -1,7 +1,7 @@
 {
   "name": "eudi-rp-ts",
   "version": "0.1.0",
-  "description": "Minimal EUDI relying party: verify age-over-18 from an SD-JWT VC",
+  "description": "Reference implementation of an EU Digital Identity relying party for Node — verifies SD-JWT VC and ISO mdoc credentials over OpenID4VP 1.0, with ETSI 119 612 trust lists and status-list revocation. Not affiliated with the European Commission.",
   "main": "./dist/index.js",
   "scripts": {
     "test": "node --test 'test/**/*.test.ts'",
@@ -15,7 +15,19 @@
     "prepack": "npm run build",
     "fetch-credential": "node scripts/fetch-reference-credential.ts"
   },
-  "keywords": [],
+  "keywords": [
+    "eudi",
+    "eudi-wallet",
+    "eidas",
+    "sd-jwt-vc",
+    "sd-jwt",
+    "mdoc",
+    "openid4vp",
+    "oid4vp",
+    "verifiable-credentials",
+    "digital-identity",
+    "relying-party"
+  ],
   "author": "Sebastian Wiese-Wagner",
   "license": "Apache-2.0",
   "type": "module",
