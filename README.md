@@ -369,8 +369,7 @@ verification logic is correct; they say nothing about EUDI interoperability.
 
 ## Licence
 
+Copyright 2026 Sebastian Wiese-Wagner.
+
 Apache License 2.0 — see [LICENSE](LICENSE). All dependencies are permissive
 (Apache-2.0 or MIT) and compatible; they are listed in [NOTICE](NOTICE).
-
-The Apache-2.0 boilerplate in `NOTICE` still has its placeholder copyright line.
-Fill in the year and copyright holder before publishing.
