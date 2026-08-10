@@ -327,11 +327,13 @@ All handled in `src/`; all easy to get wrong by assuming otherwise.
 - **`/.well-known/jwt-vc-issuer` is unsupported** by the reference issuer (HTTP
   400, "Not supported"), so `x5c` is the only key-resolution route that works
   against real EU infrastructure today. Only `x5c` is implemented.
-- **`x509_san_uri` is still not implemented.** `x509_hash` now is, which covers
-  the reference verifier's pattern (a URI SAN, identified by certificate hash).
-  If an issued access certificate needs a URI *name* rather than a hash, that
-  third mode would be required. Check what you are issued before assuming:
-  `openssl x509 -noout -text -in access-cert-chain.pem | grep -A1 'Alternative Name'`.
+- ~~`x509_san_uri` is not implemented.~~ **Corrected: it does not exist in
+  OID4VP 1.0.** It appears in draft-21 and draft-24 and is absent from the final
+  specification, which introduced `x509_hash` in its place — zero occurrences of
+  `x509_san_uri` in 1.0 Final against fourteen of `x509_hash`. The EUDI
+  reference verifier documents `pre-registered`, `x509_san_dns` and `x509_hash`
+  only. So the three prefixes implemented here cover the current specification;
+  a wallet still on a pre-1.0 draft would be the only reason to want it.
 - **The eIDAS LOTL is not a registry of PID Providers.** It lists qualified
   trust service providers. EUDI provider lists are published separately, per
   deployment — which is why the EU's own trust validator makes the list location

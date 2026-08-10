@@ -221,6 +221,7 @@ rather than inferred:
 | `/.well-known/jwt-vc-issuer` | HTTP 400, "Not supported" — so `x5c` is the only working key resolution |
 | Response encryption metadata | `encrypted_response_enc_values_supported`; the pre-1.0 `authorization_encrypted_response_alg`/`_enc` appear **zero times** in OID4VP 1.0 |
 | PID DS certificate EKUs | `1.0.18013.5.1.2`, `1.0.23220.4.1.2` |
+| `x509_san_uri` in OID4VP 1.0 Final | **absent** — present in draft-21 and draft-24, replaced by `x509_hash` |
 
 The `x509_hash` rule is implemented and pinned by a fixed test vector: hashing
 `test/fixtures/real/eudiw-verifier-leaf.pem` reproduces

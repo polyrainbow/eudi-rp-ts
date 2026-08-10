@@ -182,10 +182,14 @@ what `direct_post.jwt` wraps. **(used here)**
 **Client Identifier Prefix** — how a verifier identifies itself, as
 `<prefix>:<id>`. The ones you meet: **`redirect_uri`** (the id *is* the response
 URI; request must not be signed), **`x509_san_dns`** (a DNS name matching a
-dNSName SAN in the signing certificate), **`x509_hash`** (a hash of the
-certificate — what the EU reference verifier uses), plus `pre-registered`,
-`verifier_attestation` and `openid_federation`. **(used here —
-`redirect_uri` and `x509_san_dns`)**
+dNSName SAN in the signing certificate), **`x509_hash`** (base64url SHA-256 of
+the DER leaf — what the EU reference verifier uses), plus `pre-registered`,
+`verifier_attestation`, `openid_federation` and `origin` for the DC API.
+**(used here — `redirect_uri`, `x509_san_dns`, `x509_hash`)**
+
+**`x509_san_uri`** — a prefix from OID4VP drafts 21 and 24, **removed before
+1.0 Final** and superseded by `x509_hash`. You will still see it in libraries
+that support pre-1.0 drafts.
 
 **HAIP** — High Assurance Interoperability Profile. An OpenID profile
 constraining OID4VCI/OID4VP for high-assurance use. Source of the `haip-vp://`
