@@ -372,11 +372,20 @@ Two things to expect on a fresh deployment:
 
 ## What is proven against real infrastructure
 
+Every claim below is reproducible, and [REPRODUCE.md](REPRODUCE.md) says exactly
+how — with the dates, versions, endpoints and configuration that produced it,
+and an explicit list of what was *not* done.
+
+
 - **A genuine EUDI credential verifies.** `test/real-credential.test.ts` runs
   the full credential path — `x5c` resolution, chain to the real
   `PID Issuer CA - UT 02`, issuer signature, disclosure resolution, predicate —
   against a `urn:eudi:pid:1` issued by `backend.issuer.eudiw.dev`.
 - **The EU trust lists parse and verify.** `RUN_NETWORK_TESTS=1 npm test`.
+
+**Fetch your own credential and check it**: `npm run fetch-credential -- sd-jwt`
+drives the OID4VCI flow against `issuer.eudiw.dev` and writes a real credential
+you can verify with this library.
 
 Still **not** proven: a presentation from the reference *wallet*. That needs a
 public deployment plus an access certificate the wallet trusts, and the

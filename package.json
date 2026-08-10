@@ -12,7 +12,8 @@
     "access-cert": "node scripts/make-access-cert.ts",
     "register-rp": "node scripts/register-rp.ts",
     "build": "tsc -p tsconfig.build.json",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "fetch-credential": "node scripts/fetch-reference-credential.ts"
   },
   "keywords": [],
   "author": "Sebastian Wiese-Wagner",
