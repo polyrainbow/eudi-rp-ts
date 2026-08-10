@@ -1,0 +1,25 @@
+{
+  "name": "eudi-rp-ts",
+  "version": "0.1.0",
+  "description": "Minimal EUDI relying party: verify age-over-18 from an SD-JWT VC",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test 'test/**/*.test.ts'",
+    "fixtures": "node scripts/make-fixtures.ts",
+    "typecheck": "tsc",
+    "probe": "node scripts/probe-reference-issuer.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "@sd-jwt/sd-jwt-vc": "^0.20.0"
+  },
+  "devDependencies": {
+    "@peculiar/x509": "^2.0.0",
+    "@types/node": "^24.13.3",
+    "reflect-metadata": "^0.2.2",
+    "typescript": "^5.9.3"
+  }
+}
