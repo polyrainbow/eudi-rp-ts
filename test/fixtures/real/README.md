@@ -11,6 +11,8 @@ identity provider.
 | `eudiw-pid-sd-jwt-vc.txt` | The issued credential, no Key Binding JWT (it was never presented) |
 | `eudiw-pid-issuer-ca.pem` | `CN=PID Issuer CA - UT 02`, fetched from the leaf's AIA extension |
 | `holder-private-jwk.json` | The throwaway P-256 key the credential is bound to (`cnf.jwk`) |
+| `eudiw-pid-mdoc.txt` | The same PID in ISO 18013-5 mdoc form, `IssuerSigned` as base64url CBOR |
+| `mdoc-device-private-jwk.json` | The throwaway device key that mdoc is bound to |
 
 The private key is committed deliberately. It was generated solely to request
 this credential and exists nowhere else; publishing it lets the test suite mint
@@ -42,5 +44,13 @@ It also settles what the reference issuer actually emits:
   fallback.
 - **A `status` claim is present**, pointing at a token status list. Real
   credentials carry revocation information that we currently skip.
+- **The mdoc PID carries even less.** Its elements are `given_name`,
+  `family_name`, `nationality`, `place_of_birth`, `issuing_authority`,
+  `issuing_country`, `issuance_date`, `expiry_date` — **no `birth_date` and no
+  `age_over_18`**, so the age predicate cannot be satisfied from it at all,
+  despite the same form submission producing a `birthdate` in the SD-JWT VC.
+- **Its `validUntil` is malformed**: `2026-11-08T14:09:35+00:00Z` carries both
+  an offset and a `Z`, which is not valid RFC 3339. Reported upstream as issue
+  #177. `verifyMdoc` rejects it by default and has an explicit opt-out.
 - **`x5c` carries only the leaf.** The CA has to come from somewhere else — the
   AIA extension here, a trust list in production.

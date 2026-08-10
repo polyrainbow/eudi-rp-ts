@@ -17,7 +17,7 @@ Node runs the TypeScript as-is.
 
 ```bash
 npm install
-npm test                      # 62 tests, fully offline
+npm test                      # 76 tests, fully offline
 RUN_NETWORK_TESTS=1 npm test  # also verifies the live EU trust lists
 npm start                     # http://localhost:3000
 ```
@@ -69,6 +69,9 @@ src/trust/anchors.ts      the trust anchor set
 src/trust/issuer-key.ts   x5c resolution + chain validation   <- the part no library does
 src/trust/lotl.ts         ETSI TS 119 612 trust list client   <- no Node implementation existed
 src/trust/status.ts       Token Status List revocation
+src/mdoc/verify.ts        ISO 18013-5 mdoc, through the same trust layer
+src/mdoc/cose.ts          COSE_Sign1 verification
+src/mdoc/session-transcript.ts  the OID4VP handover a device signature commits to
 src/oid4vp/identity.ts    who this verifier is on the wire
 src/oid4vp/query.ts       the DCQL query
 src/oid4vp/request.ts     authorization request (+ JAR)
@@ -143,6 +146,10 @@ from the mdoc one:
 |---|---|---|
 | `age_over_18` | `age_equal_or_over.18` | boolean |
 | `birth_date` | `birthdate` | string, `YYYY-MM-DD` (OIDC registered claim) |
+
+In **mdoc** the same information is spelled differently again: a flat
+`age_over_18` boolean and `birth_date`, inside the namespace
+`eu.europa.ec.eudi.pid.1`. `evaluateAgeOver18Mdoc` handles that form.
 
 The live reference issuer emits **only `birthdate`** — see "Open questions".
 Both are implemented, `age_equal_or_over.18` preferred when present.

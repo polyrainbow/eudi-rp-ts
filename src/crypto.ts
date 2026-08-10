@@ -57,7 +57,8 @@ export function base64urlEncode(input: Uint8Array | Buffer): string {
  */
 export function verifyJws(
   publicKey: KeyObject,
-  data: string,
+  /** JWS signing input as a string, or raw signed bytes as for COSE. */
+  data: string | Uint8Array,
   signatureB64u: string,
   alg: JwsAlg = 'ES256',
 ): boolean {
@@ -72,7 +73,7 @@ export function verifyJws(
   try {
     return nodeVerify(
       spec.hash,
-      Buffer.from(data, 'utf8'),
+      typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data),
       { key: publicKey, dsaEncoding: 'ieee-p1363' },
       Buffer.from(signatureB64u, 'base64url'),
     );

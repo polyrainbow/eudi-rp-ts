@@ -23,14 +23,14 @@ export type {
 } from './verify.ts';
 
 // The age predicate, usable on its own against already-verified claims.
-export { evaluateAgeOver18 } from './predicate/age.ts';
+export { evaluateAgeOver18, evaluateAgeOver18Mdoc } from './predicate/age.ts';
 export type { AgeEvidence } from './predicate/age.ts';
 
 // Trust anchors: pinned, or from an ETSI TS 119 612 trust list.
 export { TrustAnchors } from './trust/anchors.ts';
 export { fetchTrustAnchors, parsePointers, parseServiceCertificates, verifyTrustList } from './trust/lotl.ts';
 export type { Pointer, TrustListOptions, TrustListResult } from './trust/lotl.ts';
-export { resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
+export { resolveIssuerCertificateChain, resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
 export type { PathValidationOptions, ResolvedIssuer } from './trust/issuer-key.ts';
 export { createStatusChecker, createStatusListCache } from './trust/status.ts';
 export type { StatusCheckOptions, StatusChecker, StatusOutcome } from './trust/status.ts';
@@ -38,6 +38,14 @@ export type { StatusCheckOptions, StatusChecker, StatusOutcome } from './trust/s
 // Outbound HTTP with a deadline, and a TTL cache for status and trust lists.
 export { DEFAULT_TIMEOUT_MS, TtlCache, fetchText } from './fetching.ts';
 export type { CacheOptions, FetchOptions } from './fetching.ts';
+
+// ISO/IEC 18013-5 mdoc, verified through the same trust layer.
+export { verifyMdoc } from './mdoc/verify.ts';
+export type { MdocVerifyOptions, VerifiedMdoc } from './mdoc/verify.ts';
+export { parseCoseSign1, verifyCoseSign1, coseAlg, coseX5Chain, coseKeyToPublicKey } from './mdoc/cose.ts';
+export type { CoseSign1 } from './mdoc/cose.ts';
+export { buildSessionTranscript, jwkThumbprint } from './mdoc/session-transcript.ts';
+export type { HandoverParameters } from './mdoc/session-transcript.ts';
 
 // OID4VP: build a request, validate the response.
 export { buildAuthorizationRequest } from './oid4vp/request.ts';

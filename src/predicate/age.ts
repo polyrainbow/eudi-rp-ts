@@ -8,7 +8,7 @@ import { type Outcome, accept, reject } from '../result.ts';
  * requires the holder to disclose their full date of birth, which is strictly
  * more information than the verifier asked for.
  */
-export type AgeEvidence = 'age_equal_or_over.18' | 'birthdate';
+export type AgeEvidence = 'age_equal_or_over.18' | 'birthdate' | 'age_over_18';
 
 export type AgeResult = {
   ageOver18: true;
@@ -59,6 +59,36 @@ export function evaluateAgeOver18(claims: Record<string, unknown>, now: Date): O
   return reject(
     'PREDICATE_CLAIM_MISSING',
     'Neither `age_equal_or_over["18"]` nor `birthdate` was disclosed',
+  );
+}
+
+/**
+ * Evaluate the predicate over mdoc elements.
+ *
+ * mdoc encodes the same information differently from SD-JWT VC: a flat boolean
+ * `age_over_18` rather than an object keyed by age, and `birth_date` rather
+ * than `birthdate`. Both spellings matter — see the table in the README.
+ */
+export function evaluateAgeOver18Mdoc(
+  elements: Record<string, unknown>,
+  now: Date,
+): Outcome<AgeResult> {
+  const flag = elements['age_over_18'];
+  if (typeof flag === 'boolean') {
+    return flag
+      ? accept({ ageOver18: true, evidence: 'age_over_18' })
+      : reject('PREDICATE_NOT_SATISFIED', 'Issuer asserts age_over_18 === false');
+  }
+
+  const birthDate = elements['birth_date'];
+  if (typeof birthDate === 'string') {
+    // mdoc full-dates may arrive as a tagged date already rendered to ISO.
+    return evaluateAgeOver18({ birthdate: birthDate.slice(0, 10) }, now);
+  }
+
+  return reject(
+    'PREDICATE_CLAIM_MISSING',
+    'Neither `age_over_18` nor `birth_date` was disclosed',
   );
 }
 

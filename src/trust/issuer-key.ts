@@ -76,6 +76,21 @@ export function resolveIssuerKeyFromX5c(
     return reject('ISSUER_KEY_UNRESOLVABLE', `Cannot parse x5c certificate: ${String(error)}`);
   }
 
+  return resolveIssuerCertificateChain(chain, anchors, now, options);
+}
+
+/**
+ * Validate a decoded certificate chain and return the leaf's key.
+ *
+ * Separate from the JOSE-specific decoding above because mdoc carries the same
+ * chain in a COSE `x5chain` header. One trust implementation, two carriers.
+ */
+export function resolveIssuerCertificateChain(
+  chain: X509Certificate[],
+  anchors: TrustAnchors,
+  now: Date,
+  options: PathValidationOptions = {},
+): Outcome<ResolvedIssuer> {
   const maxChainLength = options.maxChainLength ?? 8;
   if (chain.length > maxChainLength) {
     return reject('ISSUER_UNTRUSTED', `x5c chain is ${chain.length} long, limit ${maxChainLength}`);
