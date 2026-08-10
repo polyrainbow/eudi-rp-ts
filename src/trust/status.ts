@@ -1,4 +1,5 @@
 import { decodeProtectedHeader, verifyEs256 } from '../crypto.ts';
+import { DEFAULT_TIMEOUT_MS, TtlCache, fetchText } from '../fetching.ts';
 import type { TrustAnchors } from './anchors.ts';
 import { resolveIssuerKeyFromX5c } from './issuer-key.ts';
 
@@ -27,35 +28,97 @@ export type StatusCheckOptions = {
   now: Date;
   /** Injectable for tests; defaults to global fetch. */
   fetchImpl?: typeof fetch;
+  /** Abort a status list request after this long. */
+  timeoutMs?: number;
+  /**
+   * Shared cache. Status lists cover many credentials, so without one every
+   * verification refetches the same document. Omit to disable caching.
+   */
+  cache?: TtlCache<string>;
 };
+
+/**
+ * A cache suitable for status lists.
+ *
+ * The TTL is the window in which a revocation is not yet visible, so it trades
+ * freshness against load on the issuer. Five minutes is a starting point, not
+ * a recommendation for every deployment.
+ */
+export function createStatusListCache(ttlMs = 5 * 60_000): TtlCache<string> {
+  return new TtlCache<string>({ ttlMs });
+}
+
+/**
+ * What the status check concluded, recorded rather than inferred.
+ *
+ * `@sd-jwt` reports failures by throwing, and the only thing distinguishing a
+ * revoked credential from an unreachable status endpoint is the wording of the
+ * message. Matching on that wording breaks silently when the library rephrases
+ * it — which is exactly what happened when a fetch helper changed one string.
+ * So the checker records its own outcome and the caller reads it.
+ */
+export type StatusOutcome =
+  | { kind: 'not-checked' }
+  | { kind: 'valid' }
+  | { kind: 'revoked'; status: number }
+  | { kind: 'unavailable'; detail: string };
 
 export type StatusChecker = {
   statusListFetcher: (uri: string) => Promise<string>;
   statusVerifier: (data: string, signature: string) => boolean;
+  statusValidator: (status: number) => Promise<void>;
+  /** Read after verification to see what the status check decided. */
+  readonly outcome: StatusOutcome;
 };
 
 /** Media type for a status list token (IETF Token Status List). */
 const STATUS_LIST_JWT = 'application/statuslist+jwt';
 
 export function createStatusChecker(options: StatusCheckOptions): StatusChecker {
-  const doFetch = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   // The verifier callback gets only (data, signature) — no header, no token. So
   // the fetched list is kept here for the verifier to resolve a key from.
   let fetched: string | undefined;
 
+  let outcome: StatusOutcome = { kind: 'not-checked' };
+
+  const load = async (uri: string): Promise<string> => {
+    const { body, contentType } = await fetchText(uri, {
+      headers: { Accept: STATUS_LIST_JWT },
+      timeoutMs,
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    });
+    if (!contentType.includes('application/statuslist+jwt')) {
+      throw new Error(`Status list ${uri}: unexpected content type ${contentType}`);
+    }
+    return body.trim();
+  };
+
   return {
+    get outcome() {
+      return outcome;
+    },
+
     async statusListFetcher(uri: string): Promise<string> {
-      const response = await doFetch(uri, { headers: { Accept: STATUS_LIST_JWT } });
-      if (!response.ok) {
-        throw new Error(`Status list ${uri}: HTTP ${response.status}`);
+      try {
+        fetched = options.cache ? await options.cache.get(uri, () => load(uri)) : await load(uri);
+        return fetched;
+      } catch (error) {
+        outcome = {
+          kind: 'unavailable',
+          detail: error instanceof Error ? error.message : String(error),
+        };
+        throw error;
       }
-      const contentType = response.headers.get('content-type') ?? '';
-      if (!contentType.includes('application/statuslist+jwt')) {
-        throw new Error(`Status list ${uri}: unexpected content type ${contentType}`);
+    },
+
+    async statusValidator(status: number): Promise<void> {
+      if (status !== 0) {
+        outcome = { kind: 'revoked', status };
+        throw new Error(`Credential status is ${status}`);
       }
-      fetched = (await response.text()).trim();
-      return fetched;
+      outcome = { kind: 'valid' };
     },
 
     statusVerifier(data: string, signature: string): boolean {
@@ -68,14 +131,23 @@ export function createStatusChecker(options: StatusCheckOptions): StatusChecker 
       try {
         header = decodeProtectedHeader(fetched);
       } catch {
+        outcome = { kind: 'unavailable', detail: 'Status list is not a decodable JWT' };
         return false;
       }
-      if (header['typ'] !== 'statuslist+jwt') return false;
+      if (header['typ'] !== 'statuslist+jwt') {
+        outcome = { kind: 'unavailable', detail: `Status list typ is ${String(header['typ'])}` };
+        return false;
+      }
 
       const issuer = resolveIssuerKeyFromX5c(fetched, options.anchors, options.now);
-      if (!issuer.verified) return false;
+      if (!issuer.verified) {
+        outcome = { kind: 'unavailable', detail: `Status list signer untrusted: ${issuer.detail}` };
+        return false;
+      }
 
-      return verifyEs256(issuer.value.publicKey, data, signature);
+      const ok = verifyEs256(issuer.value.publicKey, data, signature);
+      if (!ok) outcome = { kind: 'unavailable', detail: 'Status list signature is not valid' };
+      return ok;
     },
   };
 }

@@ -3,6 +3,7 @@ import { type BinaryLike, type KeyLike, X509Certificate, constants, sign, verify
 import { SignedXml } from 'xml-crypto';
 import type { SignatureAlgorithm } from 'xml-crypto';
 import xpath from 'xpath';
+import { DEFAULT_TIMEOUT_MS, fetchText as fetchWithTimeout } from '../fetching.ts';
 import { TrustAnchors } from './anchors.ts';
 
 /**
@@ -234,9 +235,14 @@ export function parseServiceCertificates(xml: string, serviceTypes: string[]): X
 }
 
 async function fetchText(doFetch: typeof fetch, url: string): Promise<string> {
-  const response = await doFetch(url, { redirect: 'follow' });
-  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
-  return await response.text();
+  // Trust lists are fetched from 40-odd national endpoints; one that never
+  // answers must not stall startup indefinitely.
+  const { body } = await fetchWithTimeout(url, {
+    redirect: 'follow',
+    fetchImpl: doFetch,
+    timeoutMs: DEFAULT_TIMEOUT_MS * 3,
+  });
+  return body;
 }
 
 function first(nodes: unknown): Node | undefined {

@@ -1,5 +1,6 @@
 import { Openid4vpVerifier } from '@openid4vc/openid4vp';
 import type { JWK } from 'jose';
+import type { TtlCache } from '../fetching.ts';
 import type { VerifierIdentity } from './identity.ts';
 import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
@@ -9,6 +10,8 @@ import { CREDENTIAL_QUERY_ID } from './query.ts';
 
 export type PresentationContext = {
   config: VerifierIdentity;
+  /** Shared status list cache, if the application keeps one. */
+  statusCache?: TtlCache<string>;
   anchors: TrustAnchors;
   nonce: string;
   requestPayload: Record<string, unknown>;
@@ -84,6 +87,7 @@ export async function verifyPresentationResponse(
     anchors: context.anchors,
     expectedVct: context.config.requestedVct,
     checkStatus: context.config.checkStatus,
+    ...(context.statusCache ? { statusCache: context.statusCache } : {}),
     keyBinding: { nonce: context.nonce, audience },
   });
 }

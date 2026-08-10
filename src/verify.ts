@@ -15,6 +15,7 @@ export type { AgeResult };
 import type { TrustAnchors } from './trust/anchors.ts';
 import { resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
 import { createStatusChecker } from './trust/status.ts';
+import type { TtlCache } from './fetching.ts';
 
 /**
  * SD-JWT VC media types accepted in the `typ` header.
@@ -55,6 +56,13 @@ export type VerifyCredentialOptions = {
   checkStatus?: boolean;
   /** Injectable fetch for status list retrieval, for tests. */
   statusFetch?: typeof fetch;
+  /**
+   * Shared status list cache. Strongly recommended in a service: without one,
+   * every verification refetches a document that covers many credentials.
+   */
+  statusCache?: TtlCache<string>;
+  /** Abort a status list request after this long. */
+  statusTimeoutMs?: number;
   now?: Date;
 };
 
@@ -106,12 +114,15 @@ export async function verifyCredential(
     anchors: options.anchors,
     now,
     ...(options.statusFetch ? { fetchImpl: options.statusFetch } : {}),
+    ...(options.statusCache ? { cache: options.statusCache } : {}),
+    ...(options.statusTimeoutMs ? { timeoutMs: options.statusTimeoutMs } : {}),
   });
 
   const sdjwt = new SDJwtVcInstance({
     hasher,
     statusListFetcher: status.statusListFetcher,
     statusVerifier: status.statusVerifier,
+    statusValidator: status.statusValidator,
     verifier: (data, sig) => {
       issuerSignatureOk = verifyEs256(issuer.value.publicKey, data, sig);
       return issuerSignatureOk;
@@ -135,6 +146,14 @@ export async function verifyCredential(
       disableStatusVerification: !checkStatus,
     });
   } catch (error) {
+    // The status checker records what it concluded, so revocation and an
+    // unreachable endpoint are distinguished by state rather than by wording.
+    if (status.outcome.kind === 'revoked') {
+      return reject('CREDENTIAL_REVOKED', `The issuer has revoked this credential (status ${status.outcome.status})`);
+    }
+    if (status.outcome.kind === 'unavailable') {
+      return reject('STATUS_UNAVAILABLE', status.outcome.detail);
+    }
     return mapLibraryError(error, { issuerSignatureOk, keyBindingSignatureOk, requireKeyBinding });
   }
 
@@ -213,13 +232,6 @@ function mapLibraryError(
   }
   if (/not yet valid/i.test(message)) return reject('CREDENTIAL_NOT_YET_VALID', message);
   if (/expired/i.test(message)) return reject('CREDENTIAL_EXPIRED', message);
-  // Status list outcomes, before the generic signature and key binding tests:
-  // "Status is not valid" is the library's wording for a set revocation bit.
-  if (/Status is not valid/i.test(message)) {
-    return reject('CREDENTIAL_REVOKED', 'The issuer has revoked this credential');
-  }
-  if (/status list/i.test(message)) return reject('STATUS_UNAVAILABLE', message);
-
   if (/Key Binding JWT not exist/i.test(message)) return reject('KEY_BINDING_MISSING', message);
   if (/Invalid Nonce/i.test(message)) return reject('KEY_BINDING_NONCE_MISMATCH', message);
   if (/sd_hash|Key Binding|Signature is not valid/i.test(message)) {

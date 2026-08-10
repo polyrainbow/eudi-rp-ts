@@ -6,6 +6,7 @@ import type { Config } from '../config.ts';
 import { buildAuthorizationRequest } from '../../src/oid4vp/request.ts';
 import { verifyPresentationResponse } from '../../src/oid4vp/response.ts';
 import type { TrustAnchors } from '../../src/trust/anchors.ts';
+import { createStatusListCache } from '../../src/trust/status.ts';
 import { SessionStore } from './session.ts';
 
 const PAGE = readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8');
@@ -18,8 +19,15 @@ const PAGE = readFileSync(fileURLToPath(new URL('../public/index.html', import.m
  *   GET  /presentations/:id     poll the outcome
  *   POST /oid4vp/response/:id   the wallet posts the VP Token here
  */
-export function createVerifierServer(config: Config, anchors: TrustAnchors) {
+/**
+ * @param getAnchors called per request, so a refreshed trust list takes effect
+ *   without a restart.
+ */
+export function createVerifierServer(config: Config, getAnchors: TrustAnchors | (() => TrustAnchors)) {
   const sessions = new SessionStore();
+  const anchorsNow = typeof getAnchors === 'function' ? getAnchors : () => getAnchors;
+  // One cache for the process: status lists cover many credentials.
+  const statusCache = createStatusListCache();
 
   return createServer((req, res) => {
     handle(req, res).catch((error) => {
@@ -125,7 +133,8 @@ export function createVerifierServer(config: Config, anchors: TrustAnchors) {
     const outcome = await verifyPresentationResponse(
       {
         config,
-        anchors,
+        anchors: anchorsNow(),
+        statusCache,
         nonce: session.nonce,
         requestPayload: session.requestPayload,
         decryptionJwk: session.decryptionJwk,

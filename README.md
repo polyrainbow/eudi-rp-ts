@@ -174,7 +174,8 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 - **Trust lists are not fully TS 119 615.** We check the signature and that a
   service is `granted`. No service status history, no validity-time evaluation
   against the credential date, no qualifier processing, no `Sie` extensions.
-- **Sessions are in memory.** Restarting drops in-flight sessions.
+- **Sessions are in memory** in the demo app. Restarting drops them, and more
+  than one instance breaks them. The library holds no state.
 - **ES256 only**, matching what the reference issuer advertises.
 
 ## Revocation
@@ -194,6 +195,11 @@ replayed as its own status list.
 **It fails closed.** An unreachable or unverifiable status list is
 `STATUS_UNAVAILABLE`, not a pass — a verifier that accepts what it could not
 check has no revocation at all.
+
+Status lists cover many credentials, so pass a shared `statusCache`
+(`createStatusListCache()`) in anything serving traffic; without one every
+verification refetches the same document. All outbound requests carry a
+deadline, and concurrent misses on the same URL collapse into a single fetch.
 
 ## Three things the libraries do not do
 

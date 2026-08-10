@@ -32,8 +32,12 @@ export { fetchTrustAnchors, parsePointers, parseServiceCertificates, verifyTrust
 export type { Pointer, TrustListOptions, TrustListResult } from './trust/lotl.ts';
 export { resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
 export type { ResolvedIssuer } from './trust/issuer-key.ts';
-export { createStatusChecker } from './trust/status.ts';
-export type { StatusCheckOptions, StatusChecker } from './trust/status.ts';
+export { createStatusChecker, createStatusListCache } from './trust/status.ts';
+export type { StatusCheckOptions, StatusChecker, StatusOutcome } from './trust/status.ts';
+
+// Outbound HTTP with a deadline, and a TTL cache for status and trust lists.
+export { DEFAULT_TIMEOUT_MS, TtlCache, fetchText } from './fetching.ts';
+export type { CacheOptions, FetchOptions } from './fetching.ts';
 
 // OID4VP: build a request, validate the response.
 export { buildAuthorizationRequest } from './oid4vp/request.ts';

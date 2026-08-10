@@ -5,6 +5,11 @@ import { fetchTrustAnchors } from '../src/trust/lotl.ts';
 
 const config = loadConfig();
 
+/** Re-read every 12 hours: a service withdrawn from a trusted list should not
+ * stay trusted until the next restart. A refresh that fails keeps the previous
+ * anchors rather than leaving the verifier with none. */
+const TRUST_LIST_REFRESH_MS = 12 * 60 * 60 * 1000;
+
 let anchors: TrustAnchors;
 if (config.trust.mode === 'lotl') {
   console.log(`Fetching trust list: ${config.trust.lotlUrl}`);
@@ -29,7 +34,20 @@ if (/^https:\/\/localhost/.test(config.baseUrl)) {
   );
 }
 
-createVerifierServer(config, anchors).listen(config.port, () => {
+if (config.trust.mode === 'lotl') {
+  const timer = setInterval(async () => {
+    try {
+      const refreshed = await fetchTrustAnchors(config.trust, { territories: config.trust.territories });
+      anchors = refreshed.anchors;
+      console.log(`Trust list refreshed: ${anchors.certificates.length} anchors`);
+    } catch (error) {
+      console.warn(`Trust list refresh failed, keeping ${anchors.certificates.length} anchors:`, error);
+    }
+  }, TRUST_LIST_REFRESH_MS);
+  timer.unref();
+}
+
+createVerifierServer(config, () => anchors).listen(config.port, () => {
   console.log(`\neudi-rp-ts listening on http://localhost:${config.port}`);
   console.log(`  public base:   ${config.baseUrl}`);
   console.log(`  client_id:     ${config.clientIdPrefix}`);
