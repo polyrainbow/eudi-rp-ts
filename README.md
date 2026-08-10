@@ -31,6 +31,10 @@ end to end against the simulated wallet in `test/wallet.ts`.
 > Put a tunnel in front and set `BASE_URL` to its public https URL. The server
 > itself still listens on plain HTTP behind it.
 
+New to the vocabulary? [GLOSSARY.md](GLOSSARY.md) defines EUDIW, PID, mDoc,
+SD-JWT VC, OID4VCI vs OID4VP, DCQL, RPAC and the rest — including the ones that
+are easy to confuse.
+
 ## How it flows
 
 ```
