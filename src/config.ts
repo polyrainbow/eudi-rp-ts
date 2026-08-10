@@ -13,8 +13,12 @@ export type Config = {
   /** Public base URL of this verifier. The wallet must be able to reach it. */
   baseUrl: string;
   /**
-   * Scheme used to invoke the wallet. The EUDI reference verifier calls this
-   * VERIFIER_AUTHORIZATIONREQUESTURI and defaults it to `haip-vp://`.
+   * Scheme used to invoke the wallet.
+   *
+   * `eudi-openid4vp://` is what the EUDI reference infrastructure actually
+   * emits — observed on a live authorization request from
+   * verifier-backend.eudiw.dev. The reference verifier's own README documents
+   * `haip-vp://` as its default, so this is configurable rather than fixed.
    */
   walletScheme: string;
   clientIdPrefix: ClientIdPrefix;
@@ -97,7 +101,7 @@ export function loadConfig(): Config {
   const config: Config = {
     port,
     baseUrl,
-    walletScheme: env('WALLET_SCHEME') ?? 'haip-vp://',
+    walletScheme: env('WALLET_SCHEME') ?? 'eudi-openid4vp://',
     clientIdPrefix,
     clientDnsName: env('CLIENT_DNS_NAME'),
     accessCertificateChainPem: envPem('ACCESS_CERT_CHAIN'),

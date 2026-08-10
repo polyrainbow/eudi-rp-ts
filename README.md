@@ -71,7 +71,7 @@ src/http/                 server, session store
 |---|---|---|
 | `PORT` | `3000` | Listen port (plain HTTP). |
 | `BASE_URL` | `https://localhost:3000` | Public https URL wallets reach. **Set this.** |
-| `WALLET_SCHEME` | `haip-vp://` | Deep-link scheme. The EUDI reference verifier calls this `VERIFIER_AUTHORIZATIONREQUESTURI`. |
+| `WALLET_SCHEME` | `eudi-openid4vp://` | Deep-link scheme. What the live EUDI reference infrastructure emits; its verifier README documents `haip-vp://`. |
 | `CLIENT_ID_PREFIX` | `redirect_uri` | Or `x509_san_dns`. |
 | `CLIENT_DNS_NAME` | — | Required for `x509_san_dns`; must match a dNSName SAN in the leaf. |
 | `ACCESS_CERT_CHAIN_FILE` / `ACCESS_CERT_KEY_FILE` | — | Required for `x509_san_dns`; signs the request object. |
@@ -167,6 +167,15 @@ All handled in `src/`; all easy to get wrong by assuming otherwise.
 - **`/.well-known/jwt-vc-issuer` is unsupported** by the reference issuer (HTTP
   400, "Not supported"), so `x5c` is the only key-resolution route that works
   against real EU infrastructure today. Only `x5c` is implemented.
+- **The reference verifier uses `x509_hash`, not `x509_san_dns`.** A live
+  authorization request from `verifier-backend.eudiw.dev` carries
+  `client_id=x509_hash:FTTP4DJV_…`, and its signing certificate's SAN is a
+  **URI** (`URI:https://verifier-backend.eudiw.dev/`), not a dNSName. If the
+  certificate the registration service issues follows that pattern, our
+  `x509_san_dns` mode will not match it and we would need `x509_hash` (client id
+  is the base64url SHA-256 of the leaf) or `x509_san_uri`. Neither is
+  implemented. Check the SAN on the issued certificate before assuming:
+  `openssl x509 -noout -text -in access-cert-chain.pem | grep -A1 'Alternative Name'`.
 - **The eIDAS LOTL is not a registry of PID Providers.** It lists qualified
   trust service providers. EUDI provider lists are published separately, per
   deployment — which is why the EU's own trust validator makes the list location
@@ -235,7 +244,13 @@ of it.
 
 There are three routes, in descending order of how quickly you can get going.
 
-**1. A test certificate under the reference implementation's trust list.** The
+**1. A test certificate under the reference implementation's trust list.** Run
+`npm run register-rp` — it starts the flow, prints a QR code in your terminal
+and waits while you present a PID from the reference wallet, then hands you the
+`hash_pid` every other endpoint needs. It stops there on purpose: the remaining
+steps submit your real legal identity and intended use.
+
+The
 EU runs a *Testing* Relying Party Registration service at
 <https://registry.serviceproviders.eudiw.dev/> which issues access and
 registration certificates "under the trusted list of the EUDI Wallet Reference

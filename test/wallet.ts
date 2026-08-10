@@ -69,10 +69,14 @@ export async function encryptResponse(options: {
   state: string;
   /** The verifier's public encryption JWK from client_metadata. */
   encryptionJwk: JWK;
-  alg?: string;
+  /** From `encrypted_response_enc_values_supported`; defaults to A128GCM. */
   enc?: string;
 }): Promise<string> {
-  const alg = options.alg ?? 'ECDH-ES';
+  // OID4VP 1.0 §8.3, as a real wallet does it: the JWE `alg` MUST equal the
+  // chosen JWK's `alg`, the `enc` defaults to A128GCM, and the JWK's `kid` is
+  // echoed so the verifier knows which key was used.
+  const alg = options.encryptionJwk.alg;
+  if (!alg) throw new Error('Verifier JWK has no alg; cannot choose a JWE algorithm');
   const enc = options.enc ?? 'A128GCM';
   const key = await importJWK(options.encryptionJwk, alg);
 

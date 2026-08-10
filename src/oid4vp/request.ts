@@ -58,7 +58,14 @@ export async function buildAuthorizationRequest(config: Config): Promise<BuiltRe
   if (encryptResponse) {
     const { privateKey, publicKey } = await generateKeyPair('ECDH-ES', { crv: 'P-256', extractable: true });
     decryptionJwk = { ...(await exportJWK(privateKey)), alg: 'ECDH-ES' };
-    publicEncryptionJwk = { ...(await exportJWK(publicKey)), use: 'enc', alg: 'ECDH-ES', kid: 'response-encryption' };
+    // OID4VP 1.0 §8.3: the JWK MUST carry `alg` (the wallet's JWE `alg` must
+    // equal it) and a `kid` that identifies it within this request.
+    publicEncryptionJwk = {
+      ...(await exportJWK(publicKey)),
+      use: 'enc',
+      alg: 'ECDH-ES',
+      kid: 'response-encryption',
+    };
   }
 
   const requestPayload: Record<string, unknown> = {
@@ -74,13 +81,12 @@ export async function buildAuthorizationRequest(config: Config): Promise<BuiltRe
       vp_formats_supported: {
         'dc+sd-jwt': { 'sd-jwt_alg_values': ['ES256'], 'kb-jwt_alg_values': ['ES256'] },
       },
-      ...(publicEncryptionJwk
-        ? {
-            jwks: { keys: [publicEncryptionJwk] },
-            authorization_encrypted_response_alg: 'ECDH-ES',
-            authorization_encrypted_response_enc: 'A128GCM',
-          }
-        : {}),
+      // Encryption is described by the JWK alone. `authorization_encrypted_
+      // response_alg`/`_enc` are pre-1.0 JARM names and appear nowhere in
+      // OID4VP 1.0; the content encryption algorithm comes from
+      // `encrypted_response_enc_values_supported`, which SHOULD be absent while
+      // we use its default of A128GCM.
+      ...(publicEncryptionJwk ? { jwks: { keys: [publicEncryptionJwk] } } : {}),
     },
   };
 

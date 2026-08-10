@@ -115,10 +115,16 @@ describe('signed request (x509_san_dns)', () => {
     const jwt = await (await fetch(requestUri)).text();
     const payload = JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString());
 
-    assert.equal(payload.client_metadata.authorization_encrypted_response_alg, 'ECDH-ES');
+    // OID4VP 1.0 describes encryption through the JWK itself. The pre-1.0
+    // authorization_encrypted_response_* names appear nowhere in the final spec.
+    assert.ok(!('authorization_encrypted_response_alg' in payload.client_metadata));
+    assert.ok(!('authorization_encrypted_response_enc' in payload.client_metadata));
+
     const key = payload.client_metadata.jwks?.keys?.[0];
     assert.equal(key?.kty, 'EC');
     assert.equal(key?.use, 'enc');
+    assert.equal(key?.alg, 'ECDH-ES', 'the wallet picks its JWE alg from this');
+    assert.ok(key?.kid, 'kid identifies which key encrypted the response');
     assert.ok(!('d' in (key ?? {})), 'the private half must never leave the server');
   });
 
@@ -147,8 +153,9 @@ describe('signed request (x509_san_dns)', () => {
       vpToken: { [CREDENTIAL_QUERY_ID]: [presentation] },
       state: request.state,
       encryptionJwk: request.client_metadata.jwks.keys[0],
-      alg: request.client_metadata.authorization_encrypted_response_alg,
-      enc: request.client_metadata.authorization_encrypted_response_enc,
+      ...(request.client_metadata.encrypted_response_enc_values_supported?.[0]
+        ? { enc: request.client_metadata.encrypted_response_enc_values_supported[0] }
+        : {}),
     });
 
     const posted = await fetch(request.response_uri.replace(`https://${DNS_NAME}`, localUrl), {

@@ -16,7 +16,7 @@ services:
       # ACCESS_CERT_CHAIN_FILE: /run/secrets/access-chain.pem
       # ACCESS_CERT_KEY_FILE: /run/secrets/access-key.pem
 
-      WALLET_SCHEME: ${WALLET_SCHEME:-haip-vp://}
+      WALLET_SCHEME: ${WALLET_SCHEME:-eudi-openid4vp://}
       REQUESTED_VCT: ${REQUESTED_VCT:-urn:eudi:pid:1}
 
       # DEMO ANCHOR: the throwaway CA from test/fixtures, so `docker compose up`

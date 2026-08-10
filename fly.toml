@@ -17,7 +17,7 @@ primary_region = 'fra'
   REQUESTED_VCT = 'urn:eudi:pid:1'
   TRUST_ANCHORS_FILE = '/app/test/fixtures/trust-anchor.pem'
   TRUST_MODE = 'pinned'
-  WALLET_SCHEME = 'haip-vp://'
+  WALLET_SCHEME = 'eudi-openid4vp://'
 
 [http_service]
   internal_port = 3000
