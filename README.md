@@ -88,11 +88,17 @@ app/public/index.html     the single page
 ### Using it as a library
 
 ```bash
+npm install @sauseschritt/eudi-rp-ts
+```
+
+Or from a checkout:
+
+```bash
 npm run build     # tsc -> dist/, with declarations
 ```
 
 ```ts
-import { TrustAnchors, verifyAgeOver18 } from 'eudi-rp-ts';
+import { TrustAnchors, verifyAgeOver18 } from '@sauseschritt/eudi-rp-ts';
 
 const result = await verifyAgeOver18({
   credential,

@@ -108,7 +108,7 @@ At the time of writing that URL is
 Then verify with the library:
 
 ```ts
-import { TrustAnchors, verifyAgeOver18, verifyMdoc } from 'eudi-rp-ts';
+import { TrustAnchors, verifyAgeOver18, verifyMdoc } from '@sauseschritt/eudi-rp-ts';
 
 const anchors = TrustAnchors.fromPem(readFileSync('pid-issuer-ca.pem', 'utf8'));
 
