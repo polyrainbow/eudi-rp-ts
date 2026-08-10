@@ -10,6 +10,10 @@
  * `age_equal_or_over.18` is `["age_equal_or_over", "18"]`.
  */
 export const CREDENTIAL_QUERY_ID = 'age_over_18';
+/** The mdoc alternative. */
+export const MDOC_CREDENTIAL_QUERY_ID = 'age_over_18_mdoc';
+/** mdoc groups elements into namespaces; the PID's is its doc type. */
+export const PID_MDOC_NAMESPACE = 'eu.europa.ec.eudi.pid.1';
 
 /** Claim ids, referenced from `claim_sets`. */
 const AGE_FLAG = 'age_equal_or_over_18';
@@ -30,7 +34,7 @@ const BIRTHDATE = 'birthdate';
  * provide it. That ordering is the whole point: `birthdate` discloses far more
  * than the question we asked, and should never be the first choice.
  */
-export function ageOver18Query(vct: string) {
+export function ageOver18Query(vct: string, mdocDocType: string = PID_MDOC_NAMESPACE) {
   return {
     credentials: [
       {
@@ -46,6 +50,22 @@ export function ageOver18Query(vct: string) {
         ],
         claim_sets: [[AGE_FLAG], [BIRTHDATE]],
       },
+      {
+        // mdoc spells the same information differently: a flat boolean, and
+        // `birth_date` rather than `birthdate`, inside a namespace.
+        id: MDOC_CREDENTIAL_QUERY_ID,
+        format: 'mso_mdoc',
+        meta: { doctype_value: mdocDocType },
+        claims: [
+          { id: AGE_FLAG, path: [mdocDocType, 'age_over_18'] },
+          { id: BIRTHDATE, path: [mdocDocType, 'birth_date'] },
+        ],
+        claim_sets: [[AGE_FLAG], [BIRTHDATE]],
+      },
     ],
+    // Either credential answers the question. Without this the wallet would be
+    // asked for *both* (OID4VP 1.0 §6.4.2), which no holder has, and it would
+    // return nothing at all.
+    credential_sets: [{ options: [[CREDENTIAL_QUERY_ID], [MDOC_CREDENTIAL_QUERY_ID]] }],
   } as const;
 }

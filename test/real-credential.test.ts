@@ -111,6 +111,7 @@ describe('real credential over OID4VP', { skip: expired ? `credential expired ${
       requestedVct: 'urn:eudi:pid:1',
       requestTtlSeconds: 300,
     checkStatus: false,
+    tolerateMalformedMdocValidity: false,
       trust: {
         mode: 'pinned' as const,
         pinnedAnchorsPem: undefined,

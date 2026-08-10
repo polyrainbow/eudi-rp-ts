@@ -13,6 +13,11 @@ import type { TrustListOptions } from '../src/trust/lotl.ts';
 export type Config = VerifierIdentity & {
   port: number;
   trust: TrustConfig;
+  /**
+   * Accept an mdoc whose `validUntil` is not valid RFC 3339. The EU reference
+   * issuer emits one; see upstream issue #177.
+   */
+  tolerateMalformedMdocValidity: boolean;
 };
 
 export type TrustConfig = TrustListOptions & {
@@ -78,6 +83,7 @@ export function loadConfig(): Config {
     // Accepting a credential whose revocation status you did not check is
     // accepting a revoked one. Off only for an offline demo.
     checkStatus: env('STATUS_CHECK') !== 'false',
+    tolerateMalformedMdocValidity: env('MDOC_TOLERATE_MALFORMED_VALIDITY') === 'true',
     trust: {
       mode: (env('TRUST_MODE') ?? 'pinned') as TrustConfig['mode'],
       pinnedAnchorsPem: envPem('TRUST_ANCHORS'),

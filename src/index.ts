@@ -53,8 +53,13 @@ export type { HandoverParameters } from './mdoc/session-transcript.ts';
 export { buildAuthorizationRequest } from './oid4vp/request.ts';
 export type { BuiltRequest } from './oid4vp/request.ts';
 export { verifyPresentationResponse } from './oid4vp/response.ts';
-export type { PresentationContext } from './oid4vp/response.ts';
-export { ageOver18Query, CREDENTIAL_QUERY_ID } from './oid4vp/query.ts';
+export type { PresentationContext, PresentedFormat, VerifiedPresentation } from './oid4vp/response.ts';
+export {
+  ageOver18Query,
+  CREDENTIAL_QUERY_ID,
+  MDOC_CREDENTIAL_QUERY_ID,
+  PID_MDOC_NAMESPACE,
+} from './oid4vp/query.ts';
 export { clientId, responseUri } from './oid4vp/identity.ts';
 export type { ClientIdPrefix, VerifierIdentity } from './oid4vp/identity.ts';
 

@@ -6,7 +6,15 @@ import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
 import { type AgeResult, type VerifiedCredential, verifyAgeOver18 } from '../verify.ts';
 import { createDecryptJwe, createVerifyJwt, generateRandom, hashCallback } from './callbacks.ts';
-import { CREDENTIAL_QUERY_ID } from './query.ts';
+import { CREDENTIAL_QUERY_ID, MDOC_CREDENTIAL_QUERY_ID, PID_MDOC_NAMESPACE } from './query.ts';
+import { evaluateAgeOver18Mdoc } from '../predicate/age.ts';
+import { verifyDeviceResponse } from '../mdoc/device-response.ts';
+import { buildSessionTranscript, jwkThumbprint } from '../mdoc/session-transcript.ts';
+
+/** Which credential format actually answered. */
+export type PresentedFormat = 'dc+sd-jwt' | 'mso_mdoc';
+
+export type VerifiedPresentation = VerifiedCredential & AgeResult & { format: PresentedFormat };
 
 export type PresentationContext = {
   config: VerifierIdentity;
@@ -16,6 +24,13 @@ export type PresentationContext = {
   nonce: string;
   requestPayload: Record<string, unknown>;
   decryptionJwk: JWK | undefined;
+  /**
+   * Accept an mdoc whose `validUntil` is not valid RFC 3339.
+   *
+   * The EU reference issuer emits `...+00:00Z` (upstream issue #177). Strict by
+   * default; an interop workaround, not a policy, so it is named as one.
+   */
+  tolerateMalformedMdocValidity?: boolean;
 };
 
 /**
@@ -35,7 +50,7 @@ export type PresentationContext = {
 export async function verifyPresentationResponse(
   context: PresentationContext,
   authorizationResponse: Record<string, unknown>,
-): Promise<Outcome<VerifiedCredential & AgeResult>> {
+): Promise<Outcome<VerifiedPresentation>> {
   const verifier = new Openid4vpVerifier({
     callbacks: {
       hash: hashCallback,
@@ -66,57 +81,157 @@ export async function verifyPresentationResponse(
     return reject('RESPONSE_INVALID', `OID4VP response rejected: ${errorMessage(error)}`);
   }
 
-  const credential = extractCredential(vpToken);
-  if (!credential.verified) return credential;
+  if (typeof vpToken !== 'object' || vpToken === null) {
+    return reject('RESPONSE_INVALID', 'vp_token is not a JSON object');
+  }
+  const token = vpToken as Record<string, unknown>;
 
+  // The query offers both formats as alternatives, so the wallet answers with
+  // whichever it holds. Exactly one entry is expected.
+  const sdJwt = onePresentation(token[CREDENTIAL_QUERY_ID]);
+  const mdoc = onePresentation(token[MDOC_CREDENTIAL_QUERY_ID]);
+
+  if (sdJwt.present && mdoc.present) {
+    return reject('RESPONSE_INVALID', 'vp_token answers both credential queries; expected one');
+  }
+  if (sdJwt.present) {
+    return sdJwt.value ? await verifySdJwt(context, sdJwt.value) : reject('RESPONSE_INVALID', sdJwt.problem);
+  }
+  if (mdoc.present) {
+    return mdoc.value ? await verifyMdocPresentation(context, mdoc.value) : reject('RESPONSE_INVALID', mdoc.problem);
+  }
+
+  return reject(
+    'RESPONSE_INVALID',
+    `vp_token has no entry for "${CREDENTIAL_QUERY_ID}" or "${MDOC_CREDENTIAL_QUERY_ID}"`,
+  );
+}
+
+async function verifySdJwt(
+  context: PresentationContext,
+  credential: string,
+): Promise<Outcome<VerifiedPresentation>> {
   // OID4VP 1.0 Appendix B.3.6: in the Key Binding JWT the `nonce` MUST be the
   // Authorization Request nonce and `aud` MUST be the full Client Identifier,
-  // prefix included (§14.8, "Always Use the Full Client Identifier").
-  //
-  // Read straight off the request we sent rather than recomputing it from
-  // config: under the `redirect_uri` prefix the Client Identifier is the
-  // per-session response URI, so recomputing it could drift from what the
-  // wallet was actually told.
+  // prefix included (§14.8). Read off the request we sent rather than
+  // recomputed: under the `redirect_uri` prefix it is per-session.
   const audience = context.requestPayload['client_id'];
   if (typeof audience !== 'string') {
     return reject('RESPONSE_INVALID', 'Stored request payload has no client_id');
   }
 
-  return verifyAgeOver18({
-    credential: credential.value,
+  const result = await verifyAgeOver18({
+    credential,
     anchors: context.anchors,
     expectedVct: context.config.requestedVct,
     checkStatus: context.config.checkStatus,
     ...(context.statusCache ? { statusCache: context.statusCache } : {}),
     keyBinding: { nonce: context.nonce, audience },
   });
+
+  return result.verified ? accept({ ...result.value, format: 'dc+sd-jwt' as const }) : result;
 }
 
 /**
- * Pull the single SD-JWT+KB out of the VP Token.
+ * Verify an mdoc DeviceResponse.
  *
- * OID4VP 1.0 §8.1: `vp_token` is an object keyed by the DCQL Credential Query
- * id, whose values are arrays of Presentations. For `dc+sd-jwt` each
- * Presentation is a string.
+ * The holder binding works differently here: instead of a Key Binding JWT over
+ * a nonce, the wallet signs a SessionTranscript that commits to our client
+ * identifier, nonce and response URI. We rebuild that transcript from the
+ * request we sent, so a response produced for anyone else will not verify.
  */
-function extractCredential(vpToken: unknown): Outcome<string> {
-  if (typeof vpToken !== 'object' || vpToken === null) {
-    return reject('RESPONSE_INVALID', 'vp_token is not a JSON object');
+async function verifyMdocPresentation(
+  context: PresentationContext,
+  deviceResponse: string,
+): Promise<Outcome<VerifiedPresentation>> {
+  const transcript = sessionTranscriptFor(context);
+  if (!transcript.verified) return transcript;
+
+  const result = await verifyDeviceResponse({
+    deviceResponse,
+    anchors: context.anchors,
+    sessionTranscript: transcript.value,
+    expectedDocType: PID_MDOC_NAMESPACE,
+    ...(context.tolerateMalformedMdocValidity ? { tolerateMalformedValidityDates: true } : {}),
+  });
+  if (!result.verified) return result;
+
+  const elements = result.value.claims[PID_MDOC_NAMESPACE] ?? {};
+  const age = evaluateAgeOver18Mdoc(elements, new Date());
+  if (!age.verified) return age;
+
+  return accept({
+    ...age.value,
+    format: 'mso_mdoc' as const,
+    claims: elements,
+    vct: result.value.docType,
+    issuerCertificateSubject: result.value.issuerCertificateSubject,
+    // mdoc binds the holder through the device signature over the session
+    // transcript rather than a Key Binding JWT; verifyDeviceResponse has
+    // already established the equivalent guarantee.
+    keyBinding: { audience: String(context.requestPayload['client_id']), nonce: context.nonce },
+  });
+}
+
+/**
+ * The SessionTranscript the wallet's device signature must have committed to.
+ *
+ * Rebuilt from the request we sent (OID4VP 1.0 §B.2.6.1), which is what binds
+ * this response to this request.
+ */
+function sessionTranscriptFor(context: PresentationContext): Outcome<Uint8Array> {
+  const clientId = context.requestPayload['client_id'];
+  const responseUri = context.requestPayload['response_uri'] ?? context.requestPayload['redirect_uri'];
+  if (typeof clientId !== 'string' || typeof responseUri !== 'string') {
+    return reject('RESPONSE_INVALID', 'Stored request payload lacks client_id or response_uri');
   }
-  const entry = (vpToken as Record<string, unknown>)[CREDENTIAL_QUERY_ID];
-  if (entry === undefined) {
-    return reject('RESPONSE_INVALID', `vp_token has no entry for credential query "${CREDENTIAL_QUERY_ID}"`);
+
+  // The thumbprint is present only when the response is encrypted; the spec
+  // requires null otherwise, and either mistake changes the transcript and so
+  // invalidates every signature over it.
+  const encrypted = context.requestPayload['response_mode'] === 'direct_post.jwt';
+  const key = encrypted ? encryptionJwkFrom(context.requestPayload) : undefined;
+  if (encrypted && !key) {
+    return reject('RESPONSE_INVALID', 'Encrypted response mode with no published encryption key');
   }
+
+  return accept(
+    buildSessionTranscript({
+      clientId,
+      nonce: context.nonce,
+      responseUri,
+      ...(key ? { encryptionKeyThumbprint: jwkThumbprint(key) } : {}),
+    }),
+  );
+}
+
+function encryptionJwkFrom(
+  requestPayload: Record<string, unknown>,
+): { kty: string; crv: string; x: string; y: string } | undefined {
+  const metadata = requestPayload['client_metadata'] as Record<string, unknown> | undefined;
+  const jwks = metadata?.['jwks'] as { keys?: Record<string, unknown>[] } | undefined;
+  const key = jwks?.keys?.find((candidate) => candidate['use'] === 'enc') ?? jwks?.keys?.[0];
+  if (!key || typeof key['x'] !== 'string' || typeof key['y'] !== 'string') return undefined;
+  return { kty: String(key['kty']), crv: String(key['crv']), x: key['x'], y: key['y'] };
+}
+
+/**
+ * One presentation from a `vp_token` entry.
+ *
+ * OID4VP 1.0 §8.1: each value is an array of Presentations. `multiple` was not
+ * set in our query, so more than one is a protocol error.
+ */
+function onePresentation(entry: unknown): { present: boolean; value?: string; problem: string } {
+  if (entry === undefined) return { present: false, problem: '' };
   const presentations = Array.isArray(entry) ? entry : [entry];
-  const [first, ...rest] = presentations;
+  if (presentations.length !== 1) {
+    return { present: true, problem: `Expected one Presentation, got ${presentations.length}` };
+  }
+  const first = presentations[0];
   if (typeof first !== 'string') {
-    return reject('RESPONSE_INVALID', 'Presentation is not a compact SD-JWT string');
+    return { present: true, problem: 'Presentation is not a string' };
   }
-  if (rest.length > 0) {
-    // `multiple` was not set in our query, so more than one is a protocol error.
-    return reject('RESPONSE_INVALID', `Expected one Presentation, got ${presentations.length}`);
-  }
-  return accept(first);
+  return { present: true, value: first, problem: '' };
 }
 
 function errorMessage(error: unknown): string {

@@ -17,7 +17,7 @@ Node runs the TypeScript as-is.
 
 ```bash
 npm install
-npm test                      # 81 tests, fully offline
+npm test                      # 88 tests, fully offline
 RUN_NETWORK_TESTS=1 npm test  # also verifies the live EU trust lists
 npm start                     # http://localhost:3000
 ```
@@ -118,6 +118,7 @@ deploy it as-is; use the library inside your own service.
 | `ACCESS_CERT_CHAIN_PEM` / `ACCESS_CERT_KEY_PEM` | — | Same, inline. For hosts with no filesystem for secrets. |
 | `REQUESTED_VCT` | `urn:eudi:pid:1` | Credential type to ask for. |
 | `STATUS_CHECK` | `true` | Verify each credential's status list. Set `false` only for an offline demo. |
+| `MDOC_TOLERATE_MALFORMED_VALIDITY` | `false` | Accept an mdoc whose `validUntil` is not valid RFC 3339. Needed for the EU reference issuer today; see upstream issue #177. |
 | `TRUST_MODE` | `pinned` | Or `lotl`. |
 | `TRUST_ANCHORS_FILE` / `TRUST_ANCHORS_PEM` | — | PEM anchors, required for `pinned`. Path or inline. |
 | `LOTL_URL` | EU LOTL | Trust list to fetch for `lotl`. |
@@ -193,6 +194,17 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 - **ES256 only**, matching what the reference issuer advertises.
 
 ## mdoc
+
+The verifier accepts **either format**. The DCQL query lists both and uses
+`credential_sets` to say either will do — without that the wallet is asked for
+*all* listed credentials (OID4VP 1.0 §6.4.2), which no holder has, so it returns
+nothing. The response handler dispatches on whichever entry comes back, and the
+result carries a `format` field.
+
+For mdoc the holder binding works differently: instead of a Key Binding JWT over
+a nonce, the wallet signs a SessionTranscript. The handler rebuilds that
+transcript from the request it sent, so a response produced for another verifier
+cannot verify — a test asserts exactly that through the full handler.
 
 `verifyMdoc` checks an issued `IssuerSigned`; `verifyDeviceResponse` checks what
 a wallet actually sends. Both run issuer identity through the same

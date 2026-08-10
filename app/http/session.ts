@@ -28,7 +28,7 @@ export type Session = {
   expiresAt: number;
   status: SessionStatus;
   result:
-    | { verified: true; evidence: string; vct: string; issuer: string }
+    | { verified: true; format: string; evidence: string; vct: string; issuer: string }
     | { verified: false; reason: ReasonCode; detail: string }
     | undefined;
 };

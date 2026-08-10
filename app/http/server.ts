@@ -135,6 +135,7 @@ export function createVerifierServer(config: Config, getAnchors: TrustAnchors | 
         config,
         anchors: anchorsNow(),
         statusCache,
+        tolerateMalformedMdocValidity: config.tolerateMalformedMdocValidity,
         nonce: session.nonce,
         requestPayload: session.requestPayload,
         decryptionJwk: session.decryptionJwk,
@@ -147,6 +148,7 @@ export function createVerifierServer(config: Config, getAnchors: TrustAnchors | 
       outcome.verified
         ? {
             verified: true,
+            format: outcome.value.format,
             evidence: outcome.value.evidence,
             vct: outcome.value.vct,
             issuer: outcome.value.issuerCertificateSubject,

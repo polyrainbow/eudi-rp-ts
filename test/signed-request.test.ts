@@ -37,6 +37,7 @@ before(async () => {
     requestedVct: 'urn:eudi:pid:1',
     requestTtlSeconds: 300,
     checkStatus: false,
+    tolerateMalformedMdocValidity: false,
     trust: {
       mode: 'pinned',
       pinnedAnchorsPem: undefined,
