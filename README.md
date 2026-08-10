@@ -15,7 +15,7 @@ TypeScript directly.
 
 ```bash
 npm install
-npm test                      # 32 tests, fully offline
+npm test                      # 37 tests, fully offline
 RUN_NETWORK_TESTS=1 npm test  # also verifies the live EU trust lists
 npm start                     # http://localhost:3000
 ```
@@ -107,6 +107,9 @@ from the mdoc one:
 | `age_over_18` | `age_equal_or_over.18` | boolean |
 | `birth_date` | `birthdate` | string, `YYYY-MM-DD` (OIDC registered claim) |
 
+The live reference issuer emits **only `birthdate`** — see "Open questions".
+Both are implemented, `age_equal_or_over.18` preferred when present.
+
 `age_equal_or_over` is one object keyed by age, e.g. `{"16": true, "18": true}`
 — not flat `age_over_NN` claims. So the DCQL query asks for the path
 `["age_equal_or_over", "18"]`, and a wallet that discloses that property alone
@@ -124,7 +127,9 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 **Simplified, deliberately.**
 
 - **No revocation.** No CRL, no OCSP, and SD-JWT VC status list checking is off
-  (`disableStatusVerification`). This is the biggest gap.
+  (`disableStatusVerification`). This is the biggest gap, and not a theoretical
+  one: the real credential in `test/fixtures/real/` carries a `status` claim
+  pointing at a token status list, and a test asserts we currently ignore it.
 - **Certificate path validation is partial.** Signature linkage and validity
   windows are checked; name constraints, path length, key usage, EKU and
   certificate policies are not.
@@ -153,13 +158,15 @@ All handled in `src/`; all easy to get wrong by assuming otherwise.
 
 ## Open questions
 
-- **Does the live reference issuer still emit `age_equal_or_over`?** PID
-  Rulebook v1.1 (4 Sep 2025) removed the age attributes following CIR 2024/2977,
-  and `issuer.eudiw.dev` advertises an empty `claims` array for
-  `eu.europa.ec.eudi.pid_vc_sd_jwt`, so its metadata does not answer this. Run
-  `npm run probe -- <credential>` with a real credential to settle it. The
-  `birthdate` fallback covers the case where the answer is no — at the cost of
-  the holder disclosing their full date of birth.
+- ~~Does the live reference issuer still emit `age_equal_or_over`?~~
+  **Answered: no.** A real `urn:eudi:pid:1` obtained from the reference issuer
+  on 2026-08-09 discloses `family_name`, `given_name`, `birthdate`,
+  `place_of_birth`, `nationalities`, `picture`, `date_of_issuance`,
+  `date_of_expiry`, `issuing_authority`, `issuing_country` — and no age
+  attribute at all, matching PID Rulebook v1.1 / CIR 2024/2977. **So the
+  `birthdate` path is the real one today, not a fallback**, and proving age
+  against the reference issuer means the holder discloses their full date of
+  birth. The credential is committed at `test/fixtures/real/`.
 - **SD-JWT VC and current EU age verification are diverging.** The dedicated EU
   Age Verification profile (`av-doc-technical-specification`, Annex A) is
   **mdoc-only**: doctype `eu.europa.ec.av.1`, flat `age_over_18`, `redirect_uri`
@@ -218,13 +225,18 @@ Two things to expect on a fresh deployment:
   provisions two by default, so run `fly scale count 1`. Scaling out needs a
   shared session store first.
 
-## Testing against a real wallet
+## What is proven against real infrastructure
 
-Not yet done. `npm test` proves the logic against a simulated wallet and
-fixtures signed by a throwaway CA; the trust-list code is proven against the
-live EU lists. **Neither proves interoperability with the EUDI reference
-wallet** — that needs a public https deployment, an access certificate the
-wallet trusts, and a credential from `issuer.eudiw.dev`.
+- **A genuine EUDI credential verifies.** `test/real-credential.test.ts` runs
+  the full credential path — `x5c` resolution, chain to the real
+  `PID Issuer CA - UT 02`, issuer signature, disclosure resolution, predicate —
+  against a `urn:eudi:pid:1` issued by `backend.issuer.eudiw.dev`.
+- **The EU trust lists parse and verify.** `RUN_NETWORK_TESTS=1 npm test`.
+
+Still **not** proven: a presentation from the reference *wallet*. That needs a
+public deployment plus an access certificate the wallet trusts, and the
+credential above was obtained by driving OID4VCI directly rather than through a
+wallet, so it carries no Key Binding JWT.
 
 To attempt it: set `CLIENT_ID_PREFIX=x509_san_dns`, supply an access
 certificate, set `BASE_URL` to your tunnel, and point `WALLET_SCHEME` at the
