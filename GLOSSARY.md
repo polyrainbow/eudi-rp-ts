@@ -97,11 +97,20 @@ both should be accepted during a transition, and the EU reference issuer emits
 
 **mdoc / mDoc / MSO mdoc** — the ISO/IEC 18013-5 credential format. CBOR and
 COSE rather than JSON and JOSE. Identified by a **doctype** (e.g.
-`eu.europa.ec.eudi.pid.1`) with claims grouped into **namespaces**. *Not
-implemented here* — this project is deliberately SD-JWT VC only.
+`eu.europa.ec.eudi.pid.1`) with claims grouped into **namespaces**.
+**(used here)**
 
 **MSO** — Mobile Security Object. The signed object inside an mdoc carrying the
 digests of its data elements. The mdoc analogue of an SD-JWT's `_sd` array.
+**(used here)**
+
+**DeviceResponse** — what an mdoc wallet actually sends: the issuer-signed
+credential plus a **device signature** over a `SessionTranscript`. The device
+signature is mdoc's equivalent of a Key Binding JWT. **(used here)**
+
+**SessionTranscript / OpenID4VPHandover** — the structure an mdoc device
+signature commits to, binding the response to one request's client identifier,
+nonce and response URI. **(used here)**
 
 **`vct` vs `doctype`** — the same idea in the two formats. `vct` is a URI-ish
 string in SD-JWT VC (`urn:eudi:pid:1`); `doctype` is a reverse-DNS string in
@@ -136,8 +145,8 @@ different selection. **(used here)**
 
 **Status list / Token Status List** — a compressed bitstring published by the
 issuer; a credential's `status` claim points at an index in it. How revocation
-works for SD-JWT VC. Real reference credentials carry one. *Not currently
-verified here — see the README's simplifications.*
+works for SD-JWT VC. Real reference credentials carry one. **(used here —
+checked by default, and failing closed)**
 
 ---
 
@@ -173,8 +182,8 @@ object keyed by DCQL credential query id, each value an array of presentations.
 **(used here — both)**
 
 **JAR** — JWT-Secured Authorization Request, RFC 9101. The request signed as a
-JWT rather than sent as query parameters. Required with `x509_san_dns`.
-**(used here)**
+JWT rather than sent as query parameters. Required with `x509_san_dns` and
+`x509_hash`. **(used here)**
 
 **JARM** — JWT Secured Authorization Response Mode. The response equivalent;
 what `direct_post.jwt` wraps. **(used here)**
