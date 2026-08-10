@@ -4,8 +4,8 @@ import { readFileSync } from 'node:fs';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
-import type { Config } from '../src/config.ts';
-import { createVerifierServer } from '../src/http/server.ts';
+import type { Config } from '../app/config.ts';
+import { createVerifierServer } from '../app/http/server.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { CREDENTIAL_QUERY_ID } from '../src/oid4vp/query.ts';
 import { presentAgeOver18 } from './wallet.ts';
@@ -32,6 +32,7 @@ before(async () => {
     accessCertificatePrivateKeyPem: undefined,
     requestedVct: 'urn:eudi:pid:1',
     requestTtlSeconds: 300,
+    checkStatus: false,
     trust: {
       mode: 'pinned',
       pinnedAnchorsPem: undefined,
@@ -40,7 +41,6 @@ before(async () => {
       territories: [],
       lotlSigningAnchorsPem: undefined,
       insecureSkipSignatureCheck: false,
-      checkStatus: false,
     },
   };
 

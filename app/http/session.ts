@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { JWK } from 'jose';
-import type { ReasonCode } from '../result.ts';
+import type { ReasonCode } from '../../src/result.ts';
 
 /**
  * In-memory presentation sessions.

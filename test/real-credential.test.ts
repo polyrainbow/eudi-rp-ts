@@ -96,7 +96,7 @@ const expired = Date.now() > expiresAt.getTime();
 
 describe('real credential over OID4VP', { skip: expired ? `credential expired ${expiresAt.toISOString().slice(0, 10)}` : false }, () => {
   it('is accepted end to end, disclosing only birthdate', async () => {
-    const { createVerifierServer } = await import('../src/http/server.ts');
+    const { createVerifierServer } = await import('../app/http/server.ts');
     const { presentAgeOver18 } = await import('./wallet.ts');
     const holderPrivateJwk = JSON.parse(readFileSync(`${dir}holder-private-jwk.json`, 'utf8'));
 
@@ -110,6 +110,7 @@ describe('real credential over OID4VP', { skip: expired ? `credential expired ${
       accessCertificatePrivateKeyPem: undefined,
       requestedVct: 'urn:eudi:pid:1',
       requestTtlSeconds: 300,
+    checkStatus: false,
       trust: {
         mode: 'pinned' as const,
         pinnedAnchorsPem: undefined,
@@ -118,7 +119,6 @@ describe('real credential over OID4VP', { skip: expired ? `credential expired ${
         territories: [],
         lotlSigningAnchorsPem: undefined,
         insecureSkipSignatureCheck: false,
-        checkStatus: false,
       },
     };
 

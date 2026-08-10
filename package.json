@@ -2,7 +2,7 @@
   "name": "eudi-rp-ts",
   "version": "0.1.0",
   "description": "Minimal EUDI relying party: verify age-over-18 from an SD-JWT VC",
-  "main": "index.js",
+  "main": "./dist/index.js",
   "scripts": {
     "test": "node --test 'test/**/*.test.ts'",
     "fixtures": "node scripts/make-fixtures.ts",
@@ -10,7 +10,9 @@
     "probe": "node scripts/probe-reference-issuer.ts",
     "start": "node src/main.ts",
     "access-cert": "node scripts/make-access-cert.ts",
-    "register-rp": "node scripts/register-rp.ts"
+    "register-rp": "node scripts/register-rp.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
   },
   "keywords": [],
   "author": "Sebastian Wiese-Wagner",
@@ -34,5 +36,21 @@
   },
   "engines": {
     "node": ">=22.18.0"
-  }
+  },
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.tsbuildinfo",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "GLOSSARY.md",
+    "SECURITY.md"
+  ]
 }

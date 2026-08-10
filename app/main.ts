@@ -1,7 +1,7 @@
 import { loadConfig } from './config.ts';
 import { createVerifierServer } from './http/server.ts';
-import { TrustAnchors } from './trust/anchors.ts';
-import { fetchTrustAnchors } from './trust/lotl.ts';
+import { TrustAnchors } from '../src/trust/anchors.ts';
+import { fetchTrustAnchors } from '../src/trust/lotl.ts';
 
 const config = loadConfig();
 

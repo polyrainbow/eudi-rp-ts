@@ -55,21 +55,51 @@ switch on a code and never parse an error string.
 
 ## Layout
 
+`src/` is the library and `app/` is a demo that consumes it. The library reads
+no configuration, opens no ports and logs nothing; `app/config.ts` is the only
+file that touches `process.env`.
+
 ```
-src/config.ts             all env-driven configuration; nothing else reads process.env
+src/index.ts              the public API — anything else is a deep import
 src/result.ts             ReasonCode and the Outcome type
 src/crypto.ts             ES256 allowlist, JWS verification, hashing
 src/verify.ts             credential verification, orchestration
-src/predicate/age.ts      age_equal_or_over["18"], birthdate fallback
+src/predicate/age.ts      age_equal_or_over["18"], birthdate
 src/trust/anchors.ts      the trust anchor set
 src/trust/issuer-key.ts   x5c resolution + chain validation   <- the part no library does
 src/trust/lotl.ts         ETSI TS 119 612 trust list client   <- no Node implementation existed
+src/trust/status.ts       Token Status List revocation
+src/oid4vp/identity.ts    who this verifier is on the wire
 src/oid4vp/query.ts       the DCQL query
 src/oid4vp/request.ts     authorization request (+ JAR)
 src/oid4vp/response.ts    response validation, hand-off to src/verify.ts
 src/oid4vp/callbacks.ts   the crypto callbacks @openid4vc/openid4vp requires
-src/http/                 server, session store
+
+app/config.ts             environment -> library options
+app/http/                 server, in-memory session store
+app/main.ts               entry point
+app/public/index.html     the single page
 ```
+
+### Using it as a library
+
+```bash
+npm run build     # tsc -> dist/, with declarations
+```
+
+```ts
+import { TrustAnchors, verifyAgeOver18 } from 'eudi-rp-ts';
+
+const result = await verifyAgeOver18({
+  credential,
+  anchors: TrustAnchors.fromPem(issuerCaPem),
+  expectedVct: 'urn:eudi:pid:1',
+  keyBinding: { nonce, audience: clientId },
+});
+```
+
+**The demo in `app/` is a demo.** In-memory sessions, no auth, one page. Do not
+deploy it as-is; use the library inside your own service.
 
 ## Configuration
 

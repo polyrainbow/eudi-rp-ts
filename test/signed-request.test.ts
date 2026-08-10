@@ -5,8 +5,8 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import type { Config } from '../src/config.ts';
-import { createVerifierServer } from '../src/http/server.ts';
+import type { Config } from '../app/config.ts';
+import { createVerifierServer } from '../app/http/server.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { createAccessCertificate } from '../scripts/make-access-cert.ts';
 import { CREDENTIAL_QUERY_ID } from '../src/oid4vp/query.ts';
@@ -36,6 +36,7 @@ before(async () => {
     accessCertificatePrivateKeyPem: cert.keyPem,
     requestedVct: 'urn:eudi:pid:1',
     requestTtlSeconds: 300,
+    checkStatus: false,
     trust: {
       mode: 'pinned',
       pinnedAnchorsPem: undefined,
@@ -44,7 +45,6 @@ before(async () => {
       territories: [],
       lotlSigningAnchorsPem: undefined,
       insecureSkipSignatureCheck: false,
-      checkStatus: false,
     },
   };
 

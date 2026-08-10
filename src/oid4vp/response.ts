@@ -1,6 +1,6 @@
 import { Openid4vpVerifier } from '@openid4vc/openid4vp';
 import type { JWK } from 'jose';
-import type { Config } from '../config.ts';
+import type { VerifierIdentity } from './identity.ts';
 import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
 import { type AgeResult, type VerifiedCredential, verifyAgeOver18 } from '../verify.ts';
@@ -8,7 +8,7 @@ import { createDecryptJwe, createVerifyJwt, generateRandom, hashCallback } from 
 import { CREDENTIAL_QUERY_ID } from './query.ts';
 
 export type PresentationContext = {
-  config: Config;
+  config: VerifierIdentity;
   anchors: TrustAnchors;
   nonce: string;
   requestPayload: Record<string, unknown>;
@@ -83,7 +83,7 @@ export async function verifyPresentationResponse(
     credential: credential.value,
     anchors: context.anchors,
     expectedVct: context.config.requestedVct,
-    checkStatus: context.config.trust.checkStatus,
+    checkStatus: context.config.checkStatus,
     keyBinding: { nonce: context.nonce, audience },
   });
 }

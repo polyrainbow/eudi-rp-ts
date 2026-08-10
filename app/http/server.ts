@@ -3,12 +3,12 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
 import type { Config } from '../config.ts';
-import { buildAuthorizationRequest } from '../oid4vp/request.ts';
-import { verifyPresentationResponse } from '../oid4vp/response.ts';
-import type { TrustAnchors } from '../trust/anchors.ts';
+import { buildAuthorizationRequest } from '../../src/oid4vp/request.ts';
+import { verifyPresentationResponse } from '../../src/oid4vp/response.ts';
+import type { TrustAnchors } from '../../src/trust/anchors.ts';
 import { SessionStore } from './session.ts';
 
-const PAGE = readFileSync(fileURLToPath(new URL('../../public/index.html', import.meta.url)), 'utf8');
+const PAGE = readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8');
 
 /**
  * The verifier's HTTP surface. Four endpoints:

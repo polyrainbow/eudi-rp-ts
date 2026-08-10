@@ -3,7 +3,6 @@ import { type BinaryLike, type KeyLike, X509Certificate, constants, sign, verify
 import { SignedXml } from 'xml-crypto';
 import type { SignatureAlgorithm } from 'xml-crypto';
 import xpath from 'xpath';
-import type { TrustConfig } from '../config.ts';
 import { TrustAnchors } from './anchors.ts';
 
 /**
@@ -69,6 +68,18 @@ class RsaPssSha256 implements SignatureAlgorithm {
 
 const RSA_PSS_SHA256 = 'http://www.w3.org/2007/05/xmldsig-more#sha256-rsa-MGF1';
 
+/** Everything the trust list client needs. The app maps its config onto this. */
+export type TrustListOptions = {
+  /** Trust list location, e.g. the EU List of Trusted Lists. */
+  lotlUrl: string;
+  /** Service type URIs to accept. Empty means any. */
+  serviceTypes: string[];
+  /** Certificates the list's own signature must chain to. Empty means unchecked. */
+  lotlSigningAnchorsPem: string | undefined;
+  /** Never enable outside development. */
+  insecureSkipSignatureCheck: boolean;
+};
+
 export type TrustListResult = {
   anchors: TrustAnchors;
   /** Lists that were fetched successfully, for the operator to see. */
@@ -94,7 +105,7 @@ export type Pointer = {
  * it, and collects the certificates of granted services.
  */
 export async function fetchTrustAnchors(
-  config: TrustConfig,
+  config: TrustListOptions,
   options: { territories?: string[]; fetchImpl?: typeof fetch } = {},
 ): Promise<TrustListResult> {
   const doFetch = options.fetchImpl ?? fetch;

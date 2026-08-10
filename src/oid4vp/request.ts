@@ -1,7 +1,7 @@
 import { Openid4vpVerifier } from '@openid4vc/openid4vp';
 import { exportJWK, generateKeyPair } from 'jose';
 import type { JWK } from 'jose';
-import { type Config, clientId, responseUri } from '../config.ts';
+import { type VerifierIdentity, clientId, responseUri } from './identity.ts';
 import { createEncryptJwe, createSignJwt, generateRandom, hashCallback } from './callbacks.ts';
 import { ageOver18Query } from './query.ts';
 
@@ -39,7 +39,7 @@ export type BuiltRequest = {
  * the leaf. This is what the EUDI reference verifier uses, and what a real
  * wallet will accept.
  */
-export async function buildAuthorizationRequest(config: Config): Promise<BuiltRequest> {
+export async function buildAuthorizationRequest(config: VerifierIdentity): Promise<BuiltRequest> {
   const nonce = b64url(generateRandom(32));
   const state = b64url(generateRandom(32));
   // The response URI identifies the session. With `direct_post.jwt` the `state`
