@@ -21,7 +21,13 @@ export type ReasonCode =
   | 'KEY_BINDING_AUDIENCE_MISMATCH'
   // The predicate we were asked to prove
   | 'PREDICATE_CLAIM_MISSING'
-  | 'PREDICATE_NOT_SATISFIED';
+  | 'PREDICATE_NOT_SATISFIED'
+  // OID4VP protocol envelope (Phase 2)
+  | 'RESPONSE_INVALID'
+  | 'SESSION_UNKNOWN'
+  | 'SESSION_EXPIRED'
+  // Trust list retrieval (Phase 2)
+  | 'TRUST_LIST_UNAVAILABLE';
 
 export type Rejected = {
   verified: false;

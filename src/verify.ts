@@ -10,6 +10,8 @@ import {
 } from './crypto.ts';
 import { type Outcome, accept, reject } from './result.ts';
 import { type AgeResult, evaluateAgeOver18 } from './predicate/age.ts';
+
+export type { AgeResult };
 import type { TrustAnchors } from './trust/anchors.ts';
 import { resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
 

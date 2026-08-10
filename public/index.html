@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Age check — eudi-rp-ts</title>
+<style>
+  :root { color-scheme: light dark; --fg: #16181d; --bg: #fbfbfd; --muted: #6b7280; --line: #d8dae0;
+          --ok: #0f7b3f; --bad: #b3261e; --card: #fff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e7e9ee; --bg: #14161a; --muted: #9aa1ad; --line: #2e323a;
+            --ok: #58c98a; --bad: #f2867d; --card: #1c1f25; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 2.5rem 1.25rem; background: var(--bg); color: var(--fg);
+         font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex;
+         justify-content: center; }
+  main { width: 100%; max-width: 30rem; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  p.sub { color: var(--muted); margin: 0 0 1.75rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 1.5rem; }
+  button { font: inherit; font-weight: 600; padding: .7rem 1.1rem; border-radius: 8px;
+           border: 1px solid var(--line); background: var(--fg); color: var(--bg); cursor: pointer; width: 100%; }
+  button:disabled { opacity: .5; cursor: default; }
+  img { display: block; width: 15rem; height: 15rem; margin: 0 auto 1rem; image-rendering: pixelated;
+        border-radius: 8px; background: #fff; }
+  a.deeplink { display: block; text-align: center; word-break: break-all; font-size: .8rem; color: var(--muted); }
+  .verdict { font-size: 1.15rem; font-weight: 700; margin: 0 0 .4rem; }
+  .verdict.ok { color: var(--ok); } .verdict.bad { color: var(--bad); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em;
+         background: color-mix(in srgb, var(--fg) 8%, transparent); padding: .1em .35em; border-radius: 4px; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: .35rem .75rem; margin: .75rem 0 0; font-size: .9rem; }
+  dt { color: var(--muted); } dd { margin: 0; word-break: break-word; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Age verification</h1>
+  <p class="sub">Proves <code>age_equal_or_over.18</code> from an SD-JWT VC over OpenID4VP.</p>
+  <div class="card" id="card">
+    <button id="start">Start age check</button>
+  </div>
+</main>
+<script type="module">
+  const card = document.getElementById('card');
+  let timer;
+
+  document.getElementById('start').addEventListener('click', start);
+
+  async function start() {
+    card.innerHTML = '<p>Creating request…</p>';
+    const res = await fetch('/presentations', { method: 'POST' });
+    if (!res.ok) { card.innerHTML = '<p>Could not create a request.</p>'; return; }
+    const session = await res.json();
+
+    card.innerHTML = `
+      <img src="${session.qrCodeDataUri}" alt="QR code containing the OpenID4VP request">
+      <a class="deeplink" href="${session.walletUri}">Open in wallet on this device</a>`;
+
+    clearInterval(timer);
+    timer = setInterval(() => poll(session.id), 1500);
+  }
+
+  async function poll(id) {
+    const res = await fetch(`/presentations/${id}`);
+    const body = await res.json();
+    if (!res.ok) { clearInterval(timer); render({ verified: false, reason: body.reason, detail: 'Session gone.' }); return; }
+    if (body.status === 'pending') return;
+    clearInterval(timer);
+    render(body.result);
+  }
+
+  function render(result) {
+    const rows = result.verified
+      ? { Evidence: result.evidence, 'Credential type': result.vct, Issuer: result.issuer }
+      : { Reason: result.reason, Detail: result.detail };
+    card.innerHTML = `
+      <p class="verdict ${result.verified ? 'ok' : 'bad'}">
+        ${result.verified ? 'Verified — 18 or over' : 'Rejected'}
+      </p>
+      <dl>${Object.entries(rows).map(([k, v]) => `<dt>${k}</dt><dd><code>${escape(v)}</code></dd>`).join('')}</dl>
+      <p><button id="again">Run another check</button></p>`;
+    document.getElementById('again').addEventListener('click', start);
+  }
+
+  const escape = (s) => String(s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c]);
+</script>
+</body>
+</html>

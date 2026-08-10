@@ -1,0 +1,98 @@
+import { createHash, createPublicKey, randomBytes } from 'node:crypto';
+import {
+  CompactEncrypt,
+  type JWK,
+  SignJWT,
+  compactDecrypt,
+  exportJWK,
+  importJWK,
+  importPKCS8,
+  jwtVerify,
+} from 'jose';
+
+/**
+ * `@openid4vc/openid4vp` is transport and state machine only — every
+ * cryptographic operation is a callback the relying party supplies. These are
+ * those callbacks, backed by `jose`.
+ */
+
+export type SigningMaterial = {
+  /** PKCS#8 PEM of the access certificate's private key. */
+  privateKeyPem: string;
+  /** The access certificate chain, base64 DER, leaf first — the JAR `x5c`. */
+  x5c: string[];
+};
+
+export function hashCallback(data: Uint8Array, alg: string) {
+  const nodeAlg = alg.toLowerCase().replace('-', '');
+  return new Uint8Array(createHash(nodeAlg).update(data).digest());
+}
+
+export function generateRandom(byteLength: number): Uint8Array {
+  return new Uint8Array(randomBytes(byteLength));
+}
+
+export function createSignJwt(material: SigningMaterial | undefined) {
+  return async (_signer: unknown, jwt: { header: Record<string, unknown>; payload: Record<string, unknown> }) => {
+    if (!material) {
+      throw new Error('Request signing was attempted without access certificate key material');
+    }
+    const privateKey = await importPKCS8(material.privateKeyPem, 'ES256');
+    const signed = await new SignJWT(jwt.payload)
+      .setProtectedHeader({ ...jwt.header, alg: 'ES256', x5c: material.x5c } as never)
+      .sign(privateKey);
+    const signerJwk = (await exportJWK(createPublicKey(material.privateKeyPem))) as JWK;
+    return { jwt: signed, signerJwk: signerJwk as never };
+  };
+}
+
+/**
+ * Verify a JWT whose key travels with it.
+ *
+ * Used when parsing a JARM response. Trust in the key itself comes from the
+ * response being tied to a session we created, plus the credential-level checks
+ * that follow; this callback only proves the JWT is internally consistent.
+ */
+export function createVerifyJwt() {
+  return async (
+    signer: { method?: string; publicJwk?: JWK },
+    jwt: { compact: string },
+  ): Promise<{ verified: true; signerJwk: never } | { verified: false }> => {
+    if (!signer.publicJwk) return { verified: false };
+    try {
+      const key = await importJWK(signer.publicJwk);
+      await jwtVerify(jwt.compact, key);
+      return { verified: true, signerJwk: signer.publicJwk as never };
+    } catch {
+      return { verified: false };
+    }
+  };
+}
+
+/** Decrypt a JARM response (`response_mode=direct_post.jwt`). */
+export function createDecryptJwe(privateJwk: JWK | undefined) {
+  return async (jwe: string) => {
+    if (!privateJwk) return { decrypted: false as const };
+    try {
+      const key = await importJWK(privateJwk);
+      const { plaintext } = await compactDecrypt(jwe, key);
+      return {
+        decrypted: true as const,
+        decryptionJwk: privateJwk as never,
+        payload: new TextDecoder().decode(plaintext),
+      };
+    } catch {
+      return { decrypted: false as const };
+    }
+  };
+}
+
+export function createEncryptJwe() {
+  return async (encryptor: { publicJwk: JWK; alg: string; enc: string }, data: string) => {
+    const key = await importJWK(encryptor.publicJwk, encryptor.alg);
+    const jwe = await new CompactEncrypt(new TextEncoder().encode(data))
+      .setProtectedHeader({ alg: encryptor.alg, enc: encryptor.enc } as never)
+      .encrypt(key);
+    return { encryptionJwk: encryptor.publicJwk as never, jwe };
+  };
+}

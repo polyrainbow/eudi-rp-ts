@@ -1,0 +1,32 @@
+services:
+  verifier:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      # The URL wallets will use to reach this verifier. OID4VP requires https,
+      # so for a real wallet put a tunnel in front and set this to its URL.
+      BASE_URL: ${BASE_URL:-https://localhost:3000}
+
+      # redirect_uri needs no PKI: the Client Identifier IS the response URI and
+      # the request is unsigned. Switch to x509_san_dns (and supply the access
+      # certificate below) to talk to the EUDI reference wallet.
+      CLIENT_ID_PREFIX: ${CLIENT_ID_PREFIX:-redirect_uri}
+      # CLIENT_DNS_NAME: verifier.example.org
+      # ACCESS_CERT_CHAIN_FILE: /run/secrets/access-chain.pem
+      # ACCESS_CERT_KEY_FILE: /run/secrets/access-key.pem
+
+      WALLET_SCHEME: ${WALLET_SCHEME:-haip-vp://}
+      REQUESTED_VCT: ${REQUESTED_VCT:-urn:eudi:pid:1}
+
+      # DEMO ANCHOR: the throwaway CA from test/fixtures, so `docker compose up`
+      # works out of the box against the test wallet in test/wallet.ts.
+      # Replace it before this means anything.
+      TRUST_MODE: ${TRUST_MODE:-pinned}
+      TRUST_ANCHORS_FILE: ${TRUST_ANCHORS_FILE:-/app/test/fixtures/trust-anchor.pem}
+
+      # With TRUST_MODE=lotl these take over. Defaults to the eIDAS EU LOTL;
+      # point LOTL_URL at your ecosystem's list of PID Providers instead.
+      LOTL_URL: ${LOTL_URL:-https://ec.europa.eu/tools/lotl/eu-lotl.xml}
+      LOTL_TERRITORIES: ${LOTL_TERRITORIES:-}
+      LOTL_SERVICE_TYPES: ${LOTL_SERVICE_TYPES:-}

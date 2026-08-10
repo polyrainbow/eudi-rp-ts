@@ -7,18 +7,26 @@
     "test": "node --test 'test/**/*.test.ts'",
     "fixtures": "node scripts/make-fixtures.ts",
     "typecheck": "tsc",
-    "probe": "node scripts/probe-reference-issuer.ts"
+    "probe": "node scripts/probe-reference-issuer.ts",
+    "start": "node src/main.ts"
   },
   "keywords": [],
   "author": "",
   "license": "Apache-2.0",
   "type": "module",
   "dependencies": {
-    "@sd-jwt/sd-jwt-vc": "^0.20.0"
+    "@openid4vc/openid4vp": "^0.5.4",
+    "@sd-jwt/sd-jwt-vc": "^0.20.0",
+    "@xmldom/xmldom": "^0.9.10",
+    "jose": "^6.2.8",
+    "qrcode": "^1.5.4",
+    "xml-crypto": "^6.1.2",
+    "xpath": "^0.0.34"
   },
   "devDependencies": {
     "@peculiar/x509": "^2.0.0",
     "@types/node": "^24.13.3",
+    "@types/qrcode": "^1.5.6",
     "reflect-metadata": "^0.2.2",
     "typescript": "^5.9.3"
   }

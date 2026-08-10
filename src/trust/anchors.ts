@@ -13,6 +13,10 @@ export class TrustAnchors {
     this.#anchors = anchors;
   }
 
+  static fromCertificates(certificates: X509Certificate[]): TrustAnchors {
+    return new TrustAnchors(certificates);
+  }
+
   static fromPem(pem: string | string[]): TrustAnchors {
     const blocks = (Array.isArray(pem) ? pem : [pem]).flatMap(
       (p) => p.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/g) ?? [],

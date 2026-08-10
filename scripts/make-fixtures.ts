@@ -38,7 +38,7 @@ async function makeCa(name: string) {
     notBefore: new Date('2026-01-01T00:00:00Z'),
     notAfter: new Date('2030-01-01T00:00:00Z'),
     signingAlgorithm: SIGN,
-    keys,
+    keys: keys as never,
     extensions: [new x509.BasicConstraintsExtension(true, 1, true)],
   });
   return { keys, cert };
@@ -53,8 +53,8 @@ async function makeIssuerCert(ca: Awaited<ReturnType<typeof makeCa>>, name: stri
     notBefore: new Date('2026-01-01T00:00:00Z'),
     notAfter,
     signingAlgorithm: SIGN,
-    publicKey: keys.publicKey,
-    signingKey: ca.keys.privateKey,
+    publicKey: keys.publicKey as never,
+    signingKey: ca.keys.privateKey as never,
     extensions: [new x509.BasicConstraintsExtension(false, undefined, true)],
   });
   return { keys, cert };
@@ -131,6 +131,7 @@ async function main() {
   delete holderJwk.d;
   delete holderJwk.key_ops;
   delete holderJwk.ext;
+  const holderPrivateJwk = await webcrypto.subtle.exportKey('jwk', holder.privateKey);
 
   const x5c = (leaf: x509.X509Certificate) => [
     Buffer.from(leaf.rawData).toString('base64'),
@@ -241,6 +242,10 @@ async function main() {
         audience: VERIFIER_AUDIENCE,
         nonce: NONCE,
         vct: 'urn:eudi:pid:1',
+        // Key material and an un-presented credential, so a test can act as a
+        // wallet and mint a Key Binding JWT for a live nonce and audience.
+        holderPrivateJwk,
+        issued: { over18: over18.issued },
         credentials: {
           over18: over18.presented,
           under18: under18.presented,
