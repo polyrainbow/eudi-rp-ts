@@ -15,7 +15,7 @@ TypeScript directly.
 
 ```bash
 npm install
-npm test                      # 27 tests, fully offline
+npm test                      # 32 tests, fully offline
 RUN_NETWORK_TESTS=1 npm test  # also verifies the live EU trust lists
 npm start                     # http://localhost:3000
 ```
@@ -34,8 +34,9 @@ end to end against the simulated wallet in `test/wallet.ts`.
 ## How it flows
 
 ```
-browser  ──POST /presentations──▶  build OID4VP request  ──▶  QR + deep link
-wallet   ──POST /oid4vp/response──▶  ① protocol envelope   (@openid4vc/openid4vp)
+browser  ──POST /presentations─────▶  build OID4VP request  ──▶  QR + deep link
+wallet   ──GET  /oid4vp/request/:id─▶  signed request object (x509_san_dns only)
+wallet   ──POST /oid4vp/response/:id▶  ① protocol envelope   (@openid4vc/openid4vp)
                                      ② credential          (src/verify.ts)
 browser  ──GET  /presentations/:id─▶  verified / rejected + reason code
 ```
@@ -74,9 +75,10 @@ src/http/                 server, session store
 | `CLIENT_ID_PREFIX` | `redirect_uri` | Or `x509_san_dns`. |
 | `CLIENT_DNS_NAME` | — | Required for `x509_san_dns`; must match a dNSName SAN in the leaf. |
 | `ACCESS_CERT_CHAIN_FILE` / `ACCESS_CERT_KEY_FILE` | — | Required for `x509_san_dns`; signs the request object. |
+| `ACCESS_CERT_CHAIN_PEM` / `ACCESS_CERT_KEY_PEM` | — | Same, inline. For hosts with no filesystem for secrets. |
 | `REQUESTED_VCT` | `urn:eudi:pid:1` | Credential type to ask for. |
 | `TRUST_MODE` | `pinned` | Or `lotl`. |
-| `TRUST_ANCHORS_FILE` | — | PEM anchors, required for `pinned`. |
+| `TRUST_ANCHORS_FILE` / `TRUST_ANCHORS_PEM` | — | PEM anchors, required for `pinned`. Path or inline. |
 | `LOTL_URL` | EU LOTL | Trust list to fetch for `lotl`. |
 | `LOTL_TERRITORIES` | all | e.g. `DE,AT`. All 42 lists is ~20 MB and slow. |
 | `LOTL_SERVICE_TYPES` | all | e.g. `http://uri.etsi.org/TrstSvc/Svctype/CA/QC`. |
@@ -196,6 +198,10 @@ Two things to expect on a fresh deployment:
 - **`TRUST_MODE=pinned` with the demo anchor rejects every real credential** with
   `ISSUER_UNTRUSTED`. That is correct behaviour — the fixture CA is a throwaway.
   Point `TRUST_ANCHORS_FILE` at the issuer's real anchor, or switch to `lotl`.
+- **Fly's trial plan stops machines after 5 minutes**, regardless of
+  `auto_stop_machines = 'off'`. They restart on the next request, but in-memory
+  sessions do not survive. Add a card, or expect to restart a check that sat
+  idle.
 - **Run exactly one machine.** Sessions live in an in-memory `Map`, so with two
   machines the wallet's POST and the browser's poll land on different instances
   about half the time and the page shows `SESSION_EXPIRED` for a session that
@@ -255,8 +261,13 @@ production one.
 whole `x5c` chain, which is well past what a QR code can encode — embedding it
 by value fails outright. So the request object is served from
 `GET /oid4vp/request/:id` as `application/oauth-authz-req+jwt` and the QR holds
-just `client_id` and `request_uri`. Signed requests also switch the response to
-`direct_post.jwt`, encrypted to a per-session ephemeral key.
+just `client_id` and `request_uri`.
+
+**Signed requests use encrypted responses** (`direct_post.jwt`), sealed to a
+per-session ephemeral key. That is why `response_uri` carries a per-session id:
+under `direct_post.jwt` the `state` is inside the ciphertext, so the URL is the
+only thing that says which session — and therefore which decryption key — a
+response belongs to, before it can be decrypted.
 
 ## Fixtures
 

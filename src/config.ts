@@ -71,6 +71,17 @@ function envFile(name: string): string | undefined {
   return path === undefined ? undefined : readFileSync(path, 'utf8');
 }
 
+/**
+ * PEM from either a file path or the value itself.
+ *
+ * Hosts like Fly have no filesystem to put secrets on, so `<NAME>_PEM` carries
+ * the material inline (`fly secrets set X_PEM="$(cat file.pem)"`). The `_FILE`
+ * form wins when both are set.
+ */
+function envPem(name: string): string | undefined {
+  return envFile(`${name}_FILE`) ?? env(`${name}_PEM`);
+}
+
 export function loadConfig(): Config {
   const port = Number(env('PORT') ?? 3000);
   // OID4VP 1.0 §14.6 requires TLS, and the library enforces https on
@@ -89,17 +100,17 @@ export function loadConfig(): Config {
     walletScheme: env('WALLET_SCHEME') ?? 'haip-vp://',
     clientIdPrefix,
     clientDnsName: env('CLIENT_DNS_NAME'),
-    accessCertificateChainPem: envFile('ACCESS_CERT_CHAIN_FILE'),
-    accessCertificatePrivateKeyPem: envFile('ACCESS_CERT_KEY_FILE'),
+    accessCertificateChainPem: envPem('ACCESS_CERT_CHAIN'),
+    accessCertificatePrivateKeyPem: envPem('ACCESS_CERT_KEY'),
     requestedVct: env('REQUESTED_VCT') ?? 'urn:eudi:pid:1',
     requestTtlSeconds: Number(env('REQUEST_TTL_SECONDS') ?? 300),
     trust: {
       mode: (env('TRUST_MODE') ?? 'pinned') as TrustConfig['mode'],
-      pinnedAnchorsPem: envFile('TRUST_ANCHORS_FILE'),
+      pinnedAnchorsPem: envPem('TRUST_ANCHORS'),
       lotlUrl: env('LOTL_URL') ?? EU_LOTL,
       serviceTypes: (env('LOTL_SERVICE_TYPES') ?? '').split(',').filter(Boolean),
       territories: (env('LOTL_TERRITORIES') ?? '').split(',').filter(Boolean),
-      lotlSigningAnchorsPem: envFile('LOTL_SIGNING_ANCHORS_FILE'),
+      lotlSigningAnchorsPem: envPem('LOTL_SIGNING_ANCHORS'),
       insecureSkipSignatureCheck: env('LOTL_INSECURE_SKIP_SIGNATURE_CHECK') === 'true',
     },
   };
@@ -110,12 +121,12 @@ export function loadConfig(): Config {
     if (!config.clientDnsName) throw new Error('CLIENT_DNS_NAME is required when CLIENT_ID_PREFIX=x509_san_dns');
     if (!config.accessCertificateChainPem || !config.accessCertificatePrivateKeyPem) {
       throw new Error(
-        'ACCESS_CERT_CHAIN_FILE and ACCESS_CERT_KEY_FILE are required when CLIENT_ID_PREFIX=x509_san_dns',
+        'ACCESS_CERT_CHAIN_{FILE,PEM} and ACCESS_CERT_KEY_{FILE,PEM} are required when CLIENT_ID_PREFIX=x509_san_dns',
       );
     }
   }
   if (config.trust.mode === 'pinned' && !config.trust.pinnedAnchorsPem) {
-    throw new Error('TRUST_ANCHORS_FILE is required when TRUST_MODE=pinned');
+    throw new Error('TRUST_ANCHORS_FILE or TRUST_ANCHORS_PEM is required when TRUST_MODE=pinned');
   }
 
   return config;
@@ -126,9 +137,18 @@ export function loadConfig(): Config {
  *
  * OID4VP 1.0 §14.8 ("Always Use the Full Client Identifier") requires the
  * prefixed form, and the Key Binding JWT `aud` must equal exactly this string.
+ *
+ * With the `redirect_uri` prefix the Client Identifier IS the response URI,
+ * which is per-session — so verification reads the value back off the request
+ * we actually sent rather than recomputing it. See `verifyPresentationResponse`.
  */
-export function clientId(config: Config): string {
+export function clientId(config: Config, responseUri: string): string {
   return config.clientIdPrefix === 'x509_san_dns'
     ? `x509_san_dns:${config.clientDnsName}`
-    : `redirect_uri:${config.baseUrl}/oid4vp/response`;
+    : `redirect_uri:${responseUri}`;
+}
+
+/** Where the wallet posts the response for a given session. */
+export function responseUri(config: Config, responseId: string): string {
+  return `${config.baseUrl}/oid4vp/response/${responseId}`;
 }

@@ -1,6 +1,6 @@
 import { Openid4vpVerifier } from '@openid4vc/openid4vp';
 import type { JWK } from 'jose';
-import { type Config, clientId } from '../config.ts';
+import type { Config } from '../config.ts';
 import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
 import { type AgeResult, type VerifiedCredential, verifyAgeOver18 } from '../verify.ts';
@@ -69,11 +69,21 @@ export async function verifyPresentationResponse(
   // OID4VP 1.0 Appendix B.3.6: in the Key Binding JWT the `nonce` MUST be the
   // Authorization Request nonce and `aud` MUST be the full Client Identifier,
   // prefix included (§14.8, "Always Use the Full Client Identifier").
+  //
+  // Read straight off the request we sent rather than recomputing it from
+  // config: under the `redirect_uri` prefix the Client Identifier is the
+  // per-session response URI, so recomputing it could drift from what the
+  // wallet was actually told.
+  const audience = context.requestPayload['client_id'];
+  if (typeof audience !== 'string') {
+    return reject('RESPONSE_INVALID', 'Stored request payload has no client_id');
+  }
+
   return verifyAgeOver18({
     credential: credential.value,
     anchors: context.anchors,
     expectedVct: context.config.requestedVct,
-    keyBinding: { nonce: context.nonce, audience: clientId(context.config) },
+    keyBinding: { nonce: context.nonce, audience },
   });
 }
 

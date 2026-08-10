@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
-import { type Config, clientId } from '../src/config.ts';
+import type { Config } from '../src/config.ts';
 import { createVerifierServer } from '../src/http/server.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { CREDENTIAL_QUERY_ID } from '../src/oid4vp/query.ts';
@@ -62,11 +62,13 @@ function requestParams(walletUri: string): URLSearchParams {
   return new URL(walletUri.replace('haip-vp://', 'https://wallet.invalid/')).searchParams;
 }
 
-async function postToWallet(vpToken: unknown, state: string) {
-  return await fetch(`${localUrl}/oid4vp/response`, {
+/** Post as the wallet would, to the per-session response URI. */
+async function postToWallet(vpToken: unknown, params: URLSearchParams) {
+  const responseUri = params.get('response_uri')!.replace(PUBLIC_BASE, localUrl);
+  return await fetch(responseUri, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ vp_token: JSON.stringify(vpToken), state }),
+    body: new URLSearchParams({ vp_token: JSON.stringify(vpToken), state: params.get('state')! }),
   });
 }
 
@@ -82,7 +84,7 @@ describe('OID4VP round trip', () => {
 
     assert.equal(params.get('response_type'), 'vp_token');
     assert.equal(params.get('response_mode'), 'direct_post');
-    assert.equal(params.get('client_id'), clientId(config));
+    assert.equal(params.get('client_id'), `redirect_uri:${params.get('response_uri')}`);
     assert.ok(params.get('nonce'), 'request must carry a nonce');
     assert.ok(session.qrCodeDataUri.startsWith('data:image/png;base64,'));
 
@@ -105,7 +107,7 @@ describe('OID4VP round trip', () => {
       audience: params.get('client_id')!,
     });
 
-    const posted = await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, params.get('state')!);
+    const posted = await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, params);
     assert.equal(posted.status, 200);
 
     const { status, result } = await outcome(session.id);
@@ -124,13 +126,10 @@ describe('OID4VP round trip', () => {
       issuedCredential: fixtures.issued.over18,
       holderPrivateJwk: fixtures.holderPrivateJwk,
       nonce: requestParams(other.walletUri).get('nonce')!,
-      audience: clientId(config),
+      audience: `redirect_uri:${requestParams(victim.walletUri).get('response_uri')}`,
     });
 
-    await postToWallet(
-      { [CREDENTIAL_QUERY_ID]: [presentation] },
-      requestParams(victim.walletUri).get('state')!,
-    );
+    await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, requestParams(victim.walletUri));
 
     const { status, result } = await outcome(victim.id);
     assert.equal(status, 'rejected');
@@ -148,14 +147,18 @@ describe('OID4VP round trip', () => {
       audience: 'redirect_uri:https://attacker.example/oid4vp/response',
     });
 
-    await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, params.get('state')!);
+    await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, params);
 
     const { result } = await outcome(session.id);
     assert.equal(result?.['reason'], 'KEY_BINDING_AUDIENCE_MISMATCH');
   });
 
   it('refuses a response that quotes no known state', async () => {
-    const response = await postToWallet({ [CREDENTIAL_QUERY_ID]: ['whatever'] }, 'not-a-real-state');
+    const response = await fetch(`${localUrl}/oid4vp/response/not-a-real-session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ vp_token: '{}', state: 'x' }),
+    });
     assert.equal(response.status, 400);
     assert.equal((await response.json()).reason, 'SESSION_UNKNOWN');
   });
@@ -170,11 +173,11 @@ describe('OID4VP round trip', () => {
       audience: params.get('client_id')!,
     });
 
-    const first = await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, params.get('state')!);
+    const first = await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, params);
     assert.equal(first.status, 200);
 
     // A nonce is single use. Replaying the same response must not be processed.
-    const replay = await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, params.get('state')!);
+    const replay = await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, params);
     assert.equal(replay.status, 400);
     assert.equal((await replay.json()).reason, 'SESSION_UNKNOWN');
   });
@@ -183,7 +186,7 @@ describe('OID4VP round trip', () => {
     const session = await startSession();
     const params = requestParams(session.walletUri);
 
-    await postToWallet({ some_other_query: ['x'] }, params.get('state')!);
+    await postToWallet({ some_other_query: ['x'] }, params);
 
     const { result } = await outcome(session.id);
     assert.equal(result?.['verified'], false);

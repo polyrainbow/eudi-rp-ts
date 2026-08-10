@@ -15,8 +15,10 @@ export type Session = {
   id: string;
   /** OID4VP `nonce`, replayed by the wallet inside the Key Binding JWT. */
   nonce: string;
-  /** OID4VP `state`, ties the wallet's POST back to this session. */
+  /** OID4VP `state`, echoed by the wallet and checked by the OID4VP layer. */
   state: string;
+  /** Identifies this session in the `response_uri` path. */
+  responseId: string;
   /** The exact request payload we sent, needed to validate the response. */
   requestPayload: Record<string, unknown>;
   /** Ephemeral private key for `direct_post.jwt` response decryption. */
@@ -33,14 +35,14 @@ export type Session = {
 
 export class SessionStore {
   readonly #sessions = new Map<string, Session>();
-  readonly #byState = new Map<string, string>();
+  readonly #byResponseId = new Map<string, string>();
   readonly #byRequestObjectId = new Map<string, string>();
 
   create(input: Omit<Session, 'id' | 'status' | 'result'>): Session {
     this.#evictExpired();
     const session: Session = { ...input, id: randomUUID(), status: 'pending', result: undefined };
     this.#sessions.set(session.id, session);
-    this.#byState.set(session.state, session.id);
+    this.#byResponseId.set(session.responseId, session.id);
     if (session.requestObject) this.#byRequestObjectId.set(session.requestObject.id, session.id);
     return session;
   }
@@ -50,9 +52,9 @@ export class SessionStore {
     return session && session.expiresAt > Date.now() ? session : undefined;
   }
 
-  /** Look a session up by the `state` the wallet echoes back. */
-  getByState(state: string): Session | undefined {
-    const id = this.#byState.get(state);
+  /** Look a session up by the id in the `response_uri` the wallet posted to. */
+  getByResponseId(responseId: string): Session | undefined {
+    const id = this.#byResponseId.get(responseId);
     return id === undefined ? undefined : this.get(id);
   }
 
@@ -65,8 +67,8 @@ export class SessionStore {
   complete(session: Session, result: NonNullable<Session['result']>): void {
     session.status = result.verified ? 'verified' : 'rejected';
     session.result = result;
-    // A nonce is single-use: once answered, the state can never be replayed.
-    this.#byState.delete(session.state);
+    // A nonce is single use: once answered, the response URI stops resolving.
+    this.#byResponseId.delete(session.responseId);
   }
 
   #evictExpired(): void {
@@ -74,7 +76,7 @@ export class SessionStore {
     for (const [id, session] of this.#sessions) {
       if (session.expiresAt <= now) {
         this.#sessions.delete(id);
-        this.#byState.delete(session.state);
+        this.#byResponseId.delete(session.responseId);
         if (session.requestObject) this.#byRequestObjectId.delete(session.requestObject.id);
       }
     }

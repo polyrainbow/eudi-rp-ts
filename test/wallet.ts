@@ -1,4 +1,5 @@
 import { SDJwtVcInstance } from '@sd-jwt/sd-jwt-vc';
+import { CompactEncrypt, type JWK, importJWK } from 'jose';
 import { webcrypto } from 'node:crypto';
 import { base64urlEncode, hasher } from '../src/crypto.ts';
 
@@ -52,4 +53,32 @@ export async function presentAgeOver18(options: {
       },
     },
   );
+}
+
+/**
+ * Seal an authorization response for `response_mode=direct_post.jwt`.
+ *
+ * The wallet encrypts `vp_token` and `state` to the ephemeral key the verifier
+ * published in `client_metadata.jwks`, and posts the result as a single
+ * `response` parameter. Nothing in the body is readable in transit — which is
+ * why the verifier has to know which session a response belongs to from the
+ * URL it was posted to.
+ */
+export async function encryptResponse(options: {
+  vpToken: unknown;
+  state: string;
+  /** The verifier's public encryption JWK from client_metadata. */
+  encryptionJwk: JWK;
+  alg?: string;
+  enc?: string;
+}): Promise<string> {
+  const alg = options.alg ?? 'ECDH-ES';
+  const enc = options.enc ?? 'A128GCM';
+  const key = await importJWK(options.encryptionJwk, alg);
+
+  return await new CompactEncrypt(
+    new TextEncoder().encode(JSON.stringify({ vp_token: options.vpToken, state: options.state })),
+  )
+    .setProtectedHeader({ alg, enc, ...(options.encryptionJwk.kid ? { kid: options.encryptionJwk.kid } : {}) })
+    .encrypt(key);
 }

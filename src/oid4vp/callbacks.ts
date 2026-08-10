@@ -74,7 +74,10 @@ export function createDecryptJwe(privateJwk: JWK | undefined) {
   return async (jwe: string) => {
     if (!privateJwk) return { decrypted: false as const };
     try {
-      const key = await importJWK(privateJwk);
+      // jose cannot infer a key-agreement algorithm from a bare EC JWK, so the
+      // algorithm has to be named. Take it from our own key rather than from
+      // the incoming JWE header, which the sender controls.
+      const key = await importJWK(privateJwk, privateJwk.alg ?? 'ECDH-ES');
       const { plaintext } = await compactDecrypt(jwe, key);
       return {
         decrypted: true as const,

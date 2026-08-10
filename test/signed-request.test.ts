@@ -9,8 +9,13 @@ import type { Config } from '../src/config.ts';
 import { createVerifierServer } from '../src/http/server.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { createAccessCertificate } from '../scripts/make-access-cert.ts';
+import { CREDENTIAL_QUERY_ID } from '../src/oid4vp/query.ts';
+import { encryptResponse, presentAgeOver18 } from './wallet.ts';
 
 const DNS_NAME = 'verifier.test';
+const fixtures = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./fixtures/credentials.json', import.meta.url)), 'utf8'),
+);
 const anchors = TrustAnchors.fromPem(
   readFileSync(fileURLToPath(new URL('./fixtures/trust-anchor.pem', import.meta.url)), 'utf8'),
 );
@@ -52,7 +57,7 @@ after(() => void server.close());
 async function startSession() {
   const response = await fetch(`${localUrl}/presentations`, { method: 'POST' });
   assert.equal(response.status, 201);
-  const body = (await response.json()) as { walletUri: string; qrCodeDataUri: string };
+  const body = (await response.json()) as { id: string; walletUri: string; qrCodeDataUri: string };
   const params = new URL(body.walletUri.replace('haip-vp://', 'https://w.invalid/')).searchParams;
   return { ...body, params };
 }
@@ -120,5 +125,44 @@ describe('signed request (x509_san_dns)', () => {
   it('does not serve a request object for an unknown id', async () => {
     const response = await fetch(`${localUrl}/oid4vp/request/does-not-exist`);
     assert.equal(response.status, 404);
+  });
+
+  it('verifies an encrypted response end to end', async () => {
+    const { id, params } = await startSession();
+    const requestUri = params.get('request_uri')!.replace(`https://${DNS_NAME}`, localUrl);
+    const jwt = await (await fetch(requestUri)).text();
+    const request = JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString());
+
+    const presentation = await presentAgeOver18({
+      issuedCredential: fixtures.issued.over18,
+      holderPrivateJwk: fixtures.holderPrivateJwk,
+      nonce: request.nonce,
+      audience: request.client_id,
+    });
+
+    // direct_post.jwt: the whole response is sealed to the verifier's ephemeral
+    // key, so `state` is not visible in the body. The session is identified by
+    // the response_uri path instead — which is the bug this test pins.
+    const response = await encryptResponse({
+      vpToken: { [CREDENTIAL_QUERY_ID]: [presentation] },
+      state: request.state,
+      encryptionJwk: request.client_metadata.jwks.keys[0],
+      alg: request.client_metadata.authorization_encrypted_response_alg,
+      enc: request.client_metadata.authorization_encrypted_response_enc,
+    });
+
+    const posted = await fetch(request.response_uri.replace(`https://${DNS_NAME}`, localUrl), {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ response }),
+    });
+    assert.equal(posted.status, 200);
+
+    const outcome = (await (await fetch(`${localUrl}/presentations/${id}`)).json()) as {
+      status: string;
+      result: Record<string, unknown>;
+    };
+    assert.equal(outcome.status, 'verified', JSON.stringify(outcome));
+    assert.equal(outcome.result['evidence'], 'age_equal_or_over.18');
   });
 });

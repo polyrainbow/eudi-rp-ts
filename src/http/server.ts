@@ -16,7 +16,7 @@ const PAGE = readFileSync(fileURLToPath(new URL('../../public/index.html', impor
  *   GET  /                      the single demo page
  *   POST /presentations         start a session -> QR code + deep link
  *   GET  /presentations/:id     poll the outcome
- *   POST /oid4vp/response       the wallet posts the VP Token here
+ *   POST /oid4vp/response/:id   the wallet posts the VP Token here
  */
 export function createVerifierServer(config: Config, anchors: TrustAnchors) {
   const sessions = new SessionStore();
@@ -46,6 +46,7 @@ export function createVerifierServer(config: Config, anchors: TrustAnchors) {
         requestPayload: request.requestPayload,
         decryptionJwk: request.decryptionJwk,
         requestObject: request.requestObject,
+        responseId: request.responseId,
         expiresAt: Date.now() + config.requestTtlSeconds * 1000,
       });
       json(res, 201, {
@@ -84,8 +85,9 @@ export function createVerifierServer(config: Config, anchors: TrustAnchors) {
       return;
     }
 
-    if (req.method === 'POST' && path === '/oid4vp/response') {
-      await handleWalletResponse(req, res);
+    const walletResponse = /^\/oid4vp\/response\/([\w-]+)$/.exec(path);
+    if (req.method === 'POST' && walletResponse) {
+      await handleWalletResponse(req, res, walletResponse[1]!);
       return;
     }
 
@@ -95,14 +97,20 @@ export function createVerifierServer(config: Config, anchors: TrustAnchors) {
   /**
    * The wallet's `direct_post`. Body is form-encoded with `vp_token` and
    * `state` (OID4VP 1.0 §8.1), or a single `response` JWT for `direct_post.jwt`.
+   *
+   * The session comes from the URL, not the body: under `direct_post.jwt` the
+   * `state` is sealed inside the encrypted response, and the session is what
+   * holds the key needed to open it.
    */
-  async function handleWalletResponse(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  async function handleWalletResponse(
+    req: IncomingMessage,
+    res: ServerResponse,
+    responseId: string,
+  ): Promise<void> {
     const body = await readBody(req);
     const form = Object.fromEntries(new URLSearchParams(body));
 
-    // For direct_post.jwt the state is inside the encrypted JWT, so it can only
-    // be read after decryption. Try the cleartext form first.
-    const session = form['state'] ? sessions.getByState(form['state']) : undefined;
+    const session = sessions.getByResponseId(responseId);
     if (!session) {
       // Without a session there is no nonce to check the presentation against,
       // so there is nothing safe to do here.

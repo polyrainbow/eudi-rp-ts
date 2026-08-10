@@ -8,7 +8,11 @@ primary_region = 'fra'
 
 [build]
 [env]
-  CLIENT_ID_PREFIX = 'redirect_uri'
+  # Signed request objects (JAR) with the access certificate chain in x5c.
+  # The cert itself arrives via `fly secrets set ACCESS_CERT_{CHAIN,KEY}_PEM`,
+  # since there is no filesystem here to point ACCESS_CERT_*_FILE at.
+  CLIENT_ID_PREFIX = 'x509_san_dns'
+  CLIENT_DNS_NAME = 'eudi-rp-ts.fly.dev'
   PORT = '3000'
   REQUESTED_VCT = 'urn:eudi:pid:1'
   TRUST_ANCHORS_FILE = '/app/test/fixtures/trust-anchor.pem'

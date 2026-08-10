@@ -1,7 +1,7 @@
 import { Openid4vpVerifier } from '@openid4vc/openid4vp';
 import { exportJWK, generateKeyPair } from 'jose';
 import type { JWK } from 'jose';
-import { type Config, clientId } from '../config.ts';
+import { type Config, clientId, responseUri } from '../config.ts';
 import { createEncryptJwe, createSignJwt, generateRandom, hashCallback } from './callbacks.ts';
 import { ageOver18Query } from './query.ts';
 
@@ -20,6 +20,8 @@ export type BuiltRequest = {
    * fetch. Only set when the request is signed.
    */
   requestObject: { id: string; jwt: string } | undefined;
+  /** Identifies this session in the `response_uri` the wallet posts to. */
+  responseId: string;
 };
 
 /**
@@ -40,7 +42,12 @@ export type BuiltRequest = {
 export async function buildAuthorizationRequest(config: Config): Promise<BuiltRequest> {
   const nonce = b64url(generateRandom(32));
   const state = b64url(generateRandom(32));
-  const responseUri = `${config.baseUrl}/oid4vp/response`;
+  // The response URI identifies the session. With `direct_post.jwt` the `state`
+  // is sealed inside the encrypted response, so the path is the only thing that
+  // says which session — and therefore which decryption key — a response
+  // belongs to before we can decrypt it.
+  const responseId = b64url(generateRandom(16));
+  const responseUrl = responseUri(config, responseId);
   const signed = config.clientIdPrefix === 'x509_san_dns';
 
   // With direct_post.jwt the wallet encrypts the response to a key we publish
@@ -50,14 +57,14 @@ export async function buildAuthorizationRequest(config: Config): Promise<BuiltRe
   let publicEncryptionJwk: JWK | undefined;
   if (encryptResponse) {
     const { privateKey, publicKey } = await generateKeyPair('ECDH-ES', { crv: 'P-256', extractable: true });
-    decryptionJwk = await exportJWK(privateKey);
+    decryptionJwk = { ...(await exportJWK(privateKey)), alg: 'ECDH-ES' };
     publicEncryptionJwk = { ...(await exportJWK(publicKey)), use: 'enc', alg: 'ECDH-ES', kid: 'response-encryption' };
   }
 
   const requestPayload: Record<string, unknown> = {
     response_type: 'vp_token',
-    client_id: clientId(config),
-    response_uri: responseUri,
+    client_id: clientId(config, responseUrl),
+    response_uri: responseUrl,
     response_mode: encryptResponse ? 'direct_post.jwt' : 'direct_post',
     nonce,
     state,
@@ -119,6 +126,7 @@ export async function buildAuthorizationRequest(config: Config): Promise<BuiltRe
   return {
     nonce,
     state,
+    responseId,
     requestPayload: created.authorizationRequestPayload as Record<string, unknown>,
     decryptionJwk,
     walletUri: created.authorizationRequest,
