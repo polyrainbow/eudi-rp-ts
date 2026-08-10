@@ -233,7 +233,48 @@ List. It carries your relying party identifier and the set of attributes you are
 authorised to request. There is no way to mint one yourself — that is the point
 of it.
 
-**A development certificate** is enough to exercise the code path:
+There are three routes, in descending order of how quickly you can get going.
+
+**1. A test certificate under the reference implementation's trust list.** The
+EU runs a *Testing* Relying Party Registration service at
+<https://registry.serviceproviders.eudiw.dev/> which issues access and
+registration certificates "under the trusted list of the EUDI Wallet Reference
+Implementation, enabling you to test with the EUDI Wallet". It needs an EU Login
+account, and authentication happens via a PID/OID4VP flow — so you need the
+reference wallet holding a PID from `issuer.eudiw.dev` first. The API is
+documented at `/apidocs/`; the certificate comes from `/wallet_rp/certificate`
+as PKCS#12. This is the route that gets a real wallet to accept this verifier.
+
+Convert the P12 into what the config wants (add `-legacy` if OpenSSL 3 rejects
+the file's older ciphers):
+
+```bash
+openssl pkcs12 -in wrp.p12 -clcerts -nokeys       -out access-cert-chain.pem
+openssl pkcs12 -in wrp.p12 -cacerts -nokeys       >>  access-cert-chain.pem
+openssl pkcs12 -in wrp.p12 -nocerts -nodes | \
+  openssl pkcs8 -topk8 -nocrypt                   -out access-cert-key.pem
+```
+
+Set `CLIENT_DNS_NAME` to a dNSName SAN actually present in the issued leaf —
+check with `openssl x509 -in access-cert-chain.pem -noout -text | grep -A1 'Subject Alternative Name'`.
+
+**2. Production: register with your national Registrar.** Under
+[CIR (EU) 2025/848](https://eur-lex.europa.eu/eli/reg_impl/2025/848/oj), each
+Member State runs one or more registers of wallet-relying parties. You register
+in the Member State where you are established, declaring your legal identity,
+the attributes you intend to request and the intended use for each. An Access CA
+designated by that Member State then issues the RPAC; some Member States also
+issue a Registration Certificate (RPRC) that lets a wallet show the user what
+you registered for. **The regulation applies from 24 December 2026**, so national
+registrars are still coming online — check with your Member State's supervisory
+body for its timeline.
+
+Registration is not a formality: a wallet checks requested attributes against
+your registered intended use, and warns the user when a verifier asks for more
+than it registered for. Asking only for `age_equal_or_over.18`, as this project
+does, is the kind of narrow registration that gets approved easily.
+
+**3. A development certificate** is enough to exercise the code path locally:
 
 ```bash
 npm run access-cert -- verifier.example.org
