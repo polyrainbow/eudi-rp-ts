@@ -31,7 +31,7 @@ export { TrustAnchors } from './trust/anchors.ts';
 export { fetchTrustAnchors, parsePointers, parseServiceCertificates, verifyTrustList } from './trust/lotl.ts';
 export type { Pointer, TrustListOptions, TrustListResult } from './trust/lotl.ts';
 export { resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
-export type { ResolvedIssuer } from './trust/issuer-key.ts';
+export type { PathValidationOptions, ResolvedIssuer } from './trust/issuer-key.ts';
 export { createStatusChecker, createStatusListCache } from './trust/status.ts';
 export type { StatusCheckOptions, StatusChecker, StatusOutcome } from './trust/status.ts';
 
@@ -48,5 +48,10 @@ export { ageOver18Query, CREDENTIAL_QUERY_ID } from './oid4vp/query.ts';
 export { clientId, responseUri } from './oid4vp/identity.ts';
 export type { ClientIdPrefix, VerifierIdentity } from './oid4vp/identity.ts';
 
+// Structured events for auditing and metrics. The library never logs.
+export { noopSink } from './events.ts';
+export type { EventSink, VerificationEvent } from './events.ts';
+
 // Primitives, exported because a caller supplying their own callbacks needs them.
-export { ALLOWED_JWS_ALG } from './crypto.ts';
+export { DEFAULT_ALLOWED_ALGS, SUPPORTED_JWS_ALGS, isSupportedAlg, verifyJws } from './crypto.ts';
+export type { JwsAlg } from './crypto.ts';

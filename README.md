@@ -17,7 +17,7 @@ Node runs the TypeScript as-is.
 
 ```bash
 npm install
-npm test                      # 45 tests, fully offline
+npm test                      # 65 tests, fully offline
 RUN_NETWORK_TESTS=1 npm test  # also verifies the live EU trust lists
 npm start                     # http://localhost:3000
 ```
@@ -168,9 +168,15 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 - **No CRL or OCSP** for the issuer's certificate chain. Credential revocation
   via Token Status List **is** checked (see below); certificate revocation is
   not.
-- **Certificate path validation is partial.** Signature linkage and validity
-  windows are checked; name constraints, path length, key usage, EKU and
-  certificate policies are not.
+- **Certificate path validation is partial.** Checked: validity windows,
+  signature linkage, that every issuing certificate is a CA, path length, and an
+  optional Extended Key Usage allowlist. Not checked: KeyUsage bits, name
+  constraints and certificate policies — Node's `X509Certificate` exposes
+  *extended* key usage but not the KeyUsage bit string, so enforcing those means
+  parsing DER by hand.
+- **No CRL or OCSP for issuer certificates.** Credential revocation is checked
+  via Token Status List; certificate revocation relies on the issuer leaving the
+  trusted list, which the refresh picks up. That is weaker, and worth knowing.
 - **Trust lists are not fully TS 119 615.** We check the signature and that a
   service is `granted`. No service status history, no validity-time evaluation
   against the credential date, no qualifier processing, no `Sie` extensions.
@@ -200,6 +206,33 @@ Status lists cover many credentials, so pass a shared `statusCache`
 (`createStatusListCache()`) in anything serving traffic; without one every
 verification refetches the same document. All outbound requests carry a
 deadline, and concurrent misses on the same URL collapse into a single fetch.
+
+## Using it in a service
+
+The library is deliberately inert: it reads no configuration, opens no ports and
+logs nothing. Four things are worth passing in anything serving traffic.
+
+```ts
+const result = await verifyCredential({
+  credential, anchors, expectedVct: 'urn:eudi:pid:1', keyBinding,
+
+  statusCache,                          // shared; see Revocation above
+  allowedAlgs: ['ES256'],               // policy, checked against the token's alg
+  pathValidation: { requiredExtendedKeyUsage: ['1.0.18013.5.1.2'] },
+  onEvent: (event) => audit(event),     // structured, no personal data
+});
+```
+
+**Reason codes are derived from recorded state, never from error text.** An
+earlier version matched on library error messages; adding a fetch helper changed
+one string and silently turned `STATUS_UNAVAILABLE` into `CREDENTIAL_MALFORMED`.
+Every distinction that matters is now either checked explicitly or recorded by a
+callback, and a test pins that a structural defect is not reported as a bad
+signature.
+
+**Events carry no personal data by construction** — no claim values, no subject
+identifiers, no credential bytes. A test asserts it. An audit trail that quietly
+accumulates dates of birth is worse than none.
 
 ## Three things the libraries do not do
 

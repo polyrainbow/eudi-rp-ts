@@ -14,11 +14,20 @@ import type { TrustAnchors } from './anchors.ts';
  * We resolve via the `x5c` header, which is what the EUDI ecosystem uses — the
  * reference verifier's client id prefixes are `x509_san_dns` and `x509_hash`.
  *
- * SIMPLIFIED, deliberately — see README "Spec-compliant vs simplified":
- *   - no revocation checking (no CRL, no OCSP)
- *   - no name constraints, path length, key usage or EKU enforcement
- *   - no certificate policy processing
- * Validity windows and signature linkage between certificates ARE checked.
+ * Checked here: validity windows, signature linkage between certificates, that
+ * every issuing certificate is a CA, path length, an optional Extended Key
+ * Usage allowlist, and termination at a trust anchor.
+ *
+ * NOT checked, and why:
+ *   - **KeyUsage bits.** Node's `X509Certificate.keyUsage` exposes *extended*
+ *     key usage OIDs, not the KeyUsage bit string, and Node offers no access to
+ *     it. Enforcing it would mean parsing the DER extension by hand.
+ *   - **Name constraints** and **certificate policies**, for the same reason.
+ *   - **Revocation of the certificates themselves** (CRL, OCSP). Credential
+ *     revocation is handled by Token Status List; issuer certificate revocation
+ *     is a separate mechanism this does not implement. In the EUDI model a
+ *     withdrawn issuer is expected to leave the trusted list, which the trust
+ *     list refresh picks up — that is weaker than CRL and worth knowing.
  */
 export type ResolvedIssuer = {
   publicKey: KeyObject;
@@ -27,10 +36,22 @@ export type ResolvedIssuer = {
   chain: X509Certificate[];
 };
 
+export type PathValidationOptions = {
+  /**
+   * Extended Key Usage OIDs the leaf must carry at least one of. Empty means
+   * unenforced. The EU reference PID signer carries `1.0.18013.5.1.2`
+   * (ISO 18013-5 document signer) and `1.0.23220.4.1.2`.
+   */
+  requiredExtendedKeyUsage?: string[];
+  /** Reject chains longer than this, anchor excluded. */
+  maxChainLength?: number;
+};
+
 export function resolveIssuerKeyFromX5c(
   credentialJwt: string,
   anchors: TrustAnchors,
   now: Date,
+  options: PathValidationOptions = {},
 ): Outcome<ResolvedIssuer> {
   let header: Record<string, unknown>;
   try {
@@ -55,6 +76,11 @@ export function resolveIssuerKeyFromX5c(
     return reject('ISSUER_KEY_UNRESOLVABLE', `Cannot parse x5c certificate: ${String(error)}`);
   }
 
+  const maxChainLength = options.maxChainLength ?? 8;
+  if (chain.length > maxChainLength) {
+    return reject('ISSUER_UNTRUSTED', `x5c chain is ${chain.length} long, limit ${maxChainLength}`);
+  }
+
   for (const cert of chain) {
     if (now < cert.validFromDate) {
       return reject('ISSUER_UNTRUSTED', `Certificate not yet valid: ${cert.subject}`);
@@ -64,20 +90,28 @@ export function resolveIssuerKeyFromX5c(
     }
   }
 
-  // Each certificate must be signed by the next one in the chain.
+  // Each certificate must be signed by the next, and the next must be entitled
+  // to sign certificates at all. Without the CA check, a leaf could issue a
+  // certificate for any subject and the chain would still verify.
   for (let i = 0; i < chain.length - 1; i++) {
     const child = chain[i]!;
     const parent = chain[i + 1]!;
+    if (!parent.ca) {
+      return reject('ISSUER_UNTRUSTED', `x5c position ${i + 1} is not a CA: ${parent.subject}`);
+    }
     if (!child.checkIssued(parent) || !child.verify(parent.publicKey)) {
       return reject('ISSUER_UNTRUSTED', `Broken x5c chain at position ${i}: ${child.subject}`);
     }
   }
 
   // The chain must terminate at an anchor: either the top certificate IS an
-  // anchor, or an anchor signed it.
+  // anchor, or an anchor signed it. An anchor that signs must itself be a CA.
   const top = chain.at(-1)!;
   const equalAnchor = anchors.findEqual(top);
   const signingAnchor = equalAnchor ?? anchors.findIssuerOf(top);
+  if (!equalAnchor && signingAnchor && !signingAnchor.ca) {
+    return reject('ISSUER_UNTRUSTED', `Trust anchor is not a CA: ${signingAnchor.subject}`);
+  }
   if (!signingAnchor) {
     return reject(
       'ISSUER_UNTRUSTED',
@@ -86,6 +120,18 @@ export function resolveIssuerKeyFromX5c(
   }
 
   const leaf = chain[0]!;
+
+  const requiredEku = options.requiredExtendedKeyUsage ?? [];
+  if (requiredEku.length > 0) {
+    const present = leaf.keyUsage ?? [];
+    if (!requiredEku.some((oid) => present.includes(oid))) {
+      return reject(
+        'ISSUER_UNTRUSTED',
+        `Issuer certificate lacks a required extended key usage (has ${present.join(', ') || 'none'})`,
+      );
+    }
+  }
+
   if (leaf.publicKey.asymmetricKeyType !== 'ec') {
     return reject(
       'UNSUPPORTED_ALGORITHM',

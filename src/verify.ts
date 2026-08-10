@@ -1,21 +1,24 @@
 import { SDJwtVcInstance } from '@sd-jwt/sd-jwt-vc';
 import type { KeyObject } from 'node:crypto';
 import {
-  ALLOWED_JWS_ALG,
+  DEFAULT_ALLOWED_ALGS,
+  type JwsAlg,
   decodeProtectedHeader,
   decodeUnverifiedPayload,
   hasher,
-  importEcP256Jwk,
-  verifyEs256,
+  importEcJwk,
+  isSupportedAlg,
+  verifyJws,
 } from './crypto.ts';
 import { type Outcome, accept, reject } from './result.ts';
 import { type AgeResult, evaluateAgeOver18 } from './predicate/age.ts';
 
 export type { AgeResult };
 import type { TrustAnchors } from './trust/anchors.ts';
-import { resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
+import { type PathValidationOptions, resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
 import { createStatusChecker } from './trust/status.ts';
 import type { TtlCache } from './fetching.ts';
+import { type EventSink, noopSink } from './events.ts';
 
 /**
  * SD-JWT VC media types accepted in the `typ` header.
@@ -63,6 +66,21 @@ export type VerifyCredentialOptions = {
   statusCache?: TtlCache<string>;
   /** Abort a status list request after this long. */
   statusTimeoutMs?: number;
+  /** Tolerance for clock differences with the issuer, in seconds. */
+  clockSkewSeconds?: number;
+  /** Extra constraints on the issuer's certificate chain. */
+  pathValidation?: PathValidationOptions;
+  /**
+   * Signature algorithms accepted, for both the issuer signature and the Key
+   * Binding JWT. Defaults to ES256, which is all the EUDI reference
+   * infrastructure uses.
+   */
+  allowedAlgs?: readonly JwsAlg[];
+  /**
+   * Receives structured events for auditing and metrics. Carries no personal
+   * data by construction — see `src/events.ts`.
+   */
+  onEvent?: EventSink;
   now?: Date;
 };
 
@@ -78,6 +96,16 @@ export async function verifyCredential(
 ): Promise<Outcome<VerifiedCredential>> {
   const now = options.now ?? new Date();
   const requireKeyBinding = options.requireKeyBinding ?? true;
+  const emit = options.onEvent ?? noopSink;
+  const startedAt = Date.now();
+
+  /** Every exit from this function goes through one of these two. */
+  const rejectWith = (outcome: Outcome<never>) => {
+    if (!outcome.verified) {
+      emit({ type: 'verification.rejected', reason: outcome.reason, durationMs: Date.now() - startedAt });
+    }
+    return outcome;
+  };
 
   if (requireKeyBinding && !options.keyBinding) {
     throw new Error('keyBinding is required unless requireKeyBinding is explicitly false');
@@ -85,29 +113,89 @@ export async function verifyCredential(
 
   const issuerJwt = options.credential.split('~')[0];
   if (!issuerJwt || issuerJwt.split('.').length !== 3) {
-    return reject('CREDENTIAL_MALFORMED', 'Credential is not a compact SD-JWT');
+    return rejectWith(reject('CREDENTIAL_MALFORMED', 'Credential is not a compact SD-JWT'));
   }
 
   let header: Record<string, unknown>;
   try {
     header = decodeProtectedHeader(issuerJwt);
   } catch (error) {
-    return reject('CREDENTIAL_MALFORMED', `Cannot decode JWT header: ${String(error)}`);
+    return rejectWith(reject('CREDENTIAL_MALFORMED', `Cannot decode JWT header: ${String(error)}`));
   }
 
-  if (header['alg'] !== ALLOWED_JWS_ALG) {
-    return reject('UNSUPPORTED_ALGORITHM', `Expected alg ${ALLOWED_JWS_ALG}, got ${String(header['alg'])}`);
+  const allowedAlgs = options.allowedAlgs ?? DEFAULT_ALLOWED_ALGS;
+  const alg = header['alg'];
+  // Checked against the caller's policy, never used to select the algorithm.
+  if (!isSupportedAlg(alg) || !allowedAlgs.includes(alg)) {
+    return rejectWith(
+      reject('UNSUPPORTED_ALGORITHM', `alg ${String(alg)} is not in the allowed set (${allowedAlgs.join(', ')})`),
+    );
   }
   if (typeof header['typ'] !== 'string' || !ACCEPTED_TYP.has(header['typ'])) {
-    return reject('CREDENTIAL_MALFORMED', `Unexpected typ header: ${String(header['typ'])}`);
+    return rejectWith(reject('CREDENTIAL_MALFORMED', `Unexpected typ header: ${String(header['typ'])}`));
   }
 
-  const issuer = resolveIssuerKeyFromX5c(issuerJwt, options.anchors, now);
-  if (!issuer.verified) return issuer;
+  // Validity window, checked here rather than inferred from a thrown message.
+  const payload = (() => {
+    try {
+      return decodeUnverifiedPayload(issuerJwt);
+    } catch {
+      return undefined;
+    }
+  })();
+  if (!payload) return rejectWith(reject('CREDENTIAL_MALFORMED', 'Cannot decode JWT payload'));
 
-  // Track which signature check failed, rather than parsing library messages.
-  let issuerSignatureOk = false;
-  let keyBindingSignatureOk = false;
+  const skewSeconds = options.clockSkewSeconds ?? 0;
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  const exp = payload['exp'];
+  const nbf = payload['nbf'];
+  if (typeof exp === 'number' && nowSeconds > exp + skewSeconds) {
+    return rejectWith(reject('CREDENTIAL_EXPIRED', `Credential expired at ${new Date(exp * 1000).toISOString()}`));
+  }
+  if (typeof nbf === 'number' && nowSeconds < nbf - skewSeconds) {
+    return rejectWith(reject('CREDENTIAL_NOT_YET_VALID', `Credential valid from ${new Date(nbf * 1000).toISOString()}`));
+  }
+
+  // Key binding presence and nonce, likewise. Reading the KB-JWT before its
+  // signature is checked is safe because these comparisons only ever reject;
+  // acceptance still requires the library's full verification below.
+  if (options.keyBinding) {
+    const kb = keyBindingJwt(options.credential);
+    if (!kb) return rejectWith(reject('KEY_BINDING_MISSING', 'No Key Binding JWT in the presentation'));
+    let kbPayload: Record<string, unknown>;
+    try {
+      kbPayload = decodeUnverifiedPayload(kb);
+    } catch {
+      return rejectWith(reject('KEY_BINDING_INVALID', 'Key Binding JWT payload is not decodable'));
+    }
+    if (kbPayload['nonce'] !== options.keyBinding.nonce) {
+      return rejectWith(reject('KEY_BINDING_NONCE_MISMATCH', 'Key Binding JWT nonce is not the one we issued'));
+    }
+    if (kbPayload['aud'] !== options.keyBinding.audience) {
+      return rejectWith(reject(
+        'KEY_BINDING_AUDIENCE_MISMATCH',
+        `Key Binding JWT aud is ${String(kbPayload['aud'])}, expected ${options.keyBinding.audience}`,
+      ));
+    }
+  }
+
+  emit({ type: 'verification.started', vct: typeof payload['vct'] === 'string' ? payload['vct'] : undefined });
+
+  const issuer = resolveIssuerKeyFromX5c(issuerJwt, options.anchors, now, options.pathValidation ?? {});
+  if (!issuer.verified) return rejectWith(issuer);
+  emit({
+    type: 'issuer.resolved',
+    subject: issuer.value.leaf.subject,
+    chainLength: issuer.value.chain.length,
+  });
+
+  // Three states, not two: a token malformed enough that the library gives up
+  // before checking a signature leaves it *untested*, which is not the same as
+  // tested and wrong. Collapsing them reports a bad signature for what is
+  // really a structural defect.
+  type SignatureState = 'untested' | 'ok' | 'bad';
+  let issuerSignature: SignatureState = 'untested';
+  let keyBindingSignature: SignatureState = 'untested';
 
   const checkStatus = options.checkStatus ?? true;
   const status = createStatusChecker({
@@ -124,14 +212,20 @@ export async function verifyCredential(
     statusVerifier: status.statusVerifier,
     statusValidator: status.statusValidator,
     verifier: (data, sig) => {
-      issuerSignatureOk = verifyEs256(issuer.value.publicKey, data, sig);
-      return issuerSignatureOk;
+      const ok = verifyJws(issuer.value.publicKey, data, sig, alg);
+      issuerSignature = ok ? 'ok' : 'bad';
+      return ok;
     },
     kbVerifier: (data, sig) => {
-      const holderKey = holderKeyFrom(options.credential);
-      if (!holderKey) return false;
-      keyBindingSignatureOk = verifyEs256(holderKey, data, sig);
-      return keyBindingSignatureOk;
+      const kbAlg = keyBindingAlg(options.credential, allowedAlgs);
+      const holderKey = kbAlg && holderKeyFrom(options.credential, allowedAlgs);
+      if (!kbAlg || !holderKey) {
+        keyBindingSignature = 'bad';
+        return false;
+      }
+      const ok = verifyJws(holderKey, data, sig, kbAlg);
+      keyBindingSignature = ok ? 'ok' : 'bad';
+      return ok;
     },
   });
 
@@ -139,6 +233,7 @@ export async function verifyCredential(
   try {
     result = await sdjwt.verify(options.credential, {
       currentDate: Math.floor(now.getTime() / 1000),
+      ...(options.clockSkewSeconds ? { skewSeconds: options.clockSkewSeconds } : {}),
       // Supplying the nonce is what makes @sd-jwt verify the KB-JWT at all.
       ...(options.keyBinding ? { keyBindingNonce: options.keyBinding.nonce } : {}),
       // A credential with a `status` claim that we skip is one we could be
@@ -149,37 +244,46 @@ export async function verifyCredential(
     // The status checker records what it concluded, so revocation and an
     // unreachable endpoint are distinguished by state rather than by wording.
     if (status.outcome.kind === 'revoked') {
-      return reject('CREDENTIAL_REVOKED', `The issuer has revoked this credential (status ${status.outcome.status})`);
+      return rejectWith(reject('CREDENTIAL_REVOKED', `The issuer has revoked this credential (status ${status.outcome.status})`));
     }
     if (status.outcome.kind === 'unavailable') {
-      return reject('STATUS_UNAVAILABLE', status.outcome.detail);
+      return rejectWith(reject('STATUS_UNAVAILABLE', status.outcome.detail));
     }
-    return mapLibraryError(error, { issuerSignatureOk, keyBindingSignatureOk, requireKeyBinding });
+    return rejectWith(mapLibraryError(error, { issuerSignature, keyBindingSignature }));
   }
 
   const claims = result.payload as unknown as Record<string, unknown>;
   const vct = typeof claims['vct'] === 'string' ? claims['vct'] : undefined;
-  if (!vct) return reject('CREDENTIAL_MALFORMED', 'Credential has no `vct` claim');
+  if (!vct) return rejectWith(reject('CREDENTIAL_MALFORMED', 'Credential has no `vct` claim'));
   if (options.expectedVct && vct !== options.expectedVct) {
-    return reject('UNEXPECTED_VCT', `Expected vct ${options.expectedVct}, got ${vct}`);
+    return rejectWith(reject('UNEXPECTED_VCT', `Expected vct ${options.expectedVct}, got ${vct}`));
   }
 
   let keyBinding: VerifiedCredential['keyBinding'];
   if (options.keyBinding) {
-    if (!result.kb) return reject('KEY_BINDING_MISSING', 'No Key Binding JWT in the presentation');
+    if (!result.kb) return rejectWith(reject('KEY_BINDING_MISSING', 'No Key Binding JWT in the presentation'));
     // @sd-jwt checks that `aud` is present and that `nonce` matches, but never
     // checks `aud` against the verifier's own identifier. Without this check a
     // presentation made for another verifier would be accepted here.
     if (result.kb.payload.aud !== options.keyBinding.audience) {
-      return reject(
+      return rejectWith(reject(
         'KEY_BINDING_AUDIENCE_MISMATCH',
         `Key Binding JWT aud is ${String(result.kb.payload.aud)}, expected ${options.keyBinding.audience}`,
-      );
+      ));
     }
     keyBinding = { audience: result.kb.payload.aud, nonce: result.kb.payload.nonce };
   } else if (requireKeyBinding) {
-    return reject('KEY_BINDING_MISSING', 'Key binding required but no expectation supplied');
+    return rejectWith(reject('KEY_BINDING_MISSING', 'Key binding required but no expectation supplied'));
   }
+
+  if (status.outcome.kind !== 'not-checked') {
+    emit({
+      type: 'status.checked',
+      outcome: status.outcome.kind === 'revoked' ? 'revoked' : status.outcome.kind,
+      cached: options.statusCache !== undefined,
+    });
+  }
+  emit({ type: 'verification.accepted', vct, durationMs: Date.now() - startedAt });
 
   return accept({
     claims,
@@ -209,33 +313,53 @@ export async function verifyAgeOver18(
  * invokes `kbVerifier` after the issuer signature over that same payload has
  * already been verified, so the `cnf` we read is issuer-attested.
  */
-function holderKeyFrom(credential: string): KeyObject | undefined {
-  const issuerJwt = credential.split('~')[0];
-  if (!issuerJwt) return undefined;
+/** The Key Binding JWT's own algorithm, subject to the same policy. */
+function keyBindingAlg(credential: string, allowed: readonly JwsAlg[]): JwsAlg | undefined {
+  const kb = keyBindingJwt(credential);
+  if (!kb) return undefined;
   try {
-    const cnf = decodeUnverifiedPayload(issuerJwt)['cnf'];
-    if (typeof cnf !== 'object' || cnf === null) return undefined;
-    return importEcP256Jwk((cnf as Record<string, unknown>)['jwk']);
+    const alg = decodeProtectedHeader(kb)['alg'];
+    return isSupportedAlg(alg) && allowed.includes(alg) ? alg : undefined;
   } catch {
     return undefined;
   }
 }
 
+function holderKeyFrom(credential: string, allowed: readonly JwsAlg[]): KeyObject | undefined {
+  const issuerJwt = credential.split('~')[0];
+  if (!issuerJwt) return undefined;
+  try {
+    const cnf = decodeUnverifiedPayload(issuerJwt)['cnf'];
+    if (typeof cnf !== 'object' || cnf === null) return undefined;
+    return importEcJwk((cnf as Record<string, unknown>)['jwk'], allowed);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Turn a library failure into a reason code, from recorded state only.
+ *
+ * Nothing here inspects the message. Reason codes derived by matching wording
+ * change silently when a dependency rephrases an error — which happened once in
+ * this codebase already — so every distinction that matters is either checked
+ * explicitly before the library runs, or recorded by one of our callbacks.
+ */
 function mapLibraryError(
   error: unknown,
-  state: { issuerSignatureOk: boolean; keyBindingSignatureOk: boolean; requireKeyBinding: boolean },
+  state: { issuerSignature: 'untested' | 'ok' | 'bad'; keyBindingSignature: 'untested' | 'ok' | 'bad' },
 ): Outcome<never> {
   const message = error instanceof Error ? error.message : String(error);
 
-  if (!state.issuerSignatureOk && /signature/i.test(message)) {
-    return reject('ISSUER_SIGNATURE_INVALID', message);
-  }
-  if (/not yet valid/i.test(message)) return reject('CREDENTIAL_NOT_YET_VALID', message);
-  if (/expired/i.test(message)) return reject('CREDENTIAL_EXPIRED', message);
-  if (/Key Binding JWT not exist/i.test(message)) return reject('KEY_BINDING_MISSING', message);
-  if (/Invalid Nonce/i.test(message)) return reject('KEY_BINDING_NONCE_MISMATCH', message);
-  if (/sd_hash|Key Binding|Signature is not valid/i.test(message)) {
-    return reject('KEY_BINDING_INVALID', message);
-  }
+  if (state.issuerSignature === 'bad') return reject('ISSUER_SIGNATURE_INVALID', message);
+  if (state.keyBindingSignature === 'bad') return reject('KEY_BINDING_INVALID', message);
+  // Either a signature was never reached, or both verified and what remains is
+  // structural: an unreferenced disclosure, a bad digest, a wrong sd_hash.
   return reject('CREDENTIAL_MALFORMED', message);
+}
+
+/** The Key Binding JWT, which is the trailing `~`-separated segment if present. */
+function keyBindingJwt(credential: string): string | undefined {
+  const last = credential.split('~').at(-1);
+  return last && last.split('.').length === 3 ? last : undefined;
 }
