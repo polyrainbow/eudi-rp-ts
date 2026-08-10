@@ -196,8 +196,12 @@ Two things to expect on a fresh deployment:
 - **`TRUST_MODE=pinned` with the demo anchor rejects every real credential** with
   `ISSUER_UNTRUSTED`. That is correct behaviour — the fixture CA is a throwaway.
   Point `TRUST_ANCHORS_FILE` at the issuer's real anchor, or switch to `lotl`.
-- **Sessions are lost if the machine restarts.** `fly.toml` sets
-  `min_machines_running = 1` and disables auto-stop for that reason.
+- **Run exactly one machine.** Sessions live in an in-memory `Map`, so with two
+  machines the wallet's POST and the browser's poll land on different instances
+  about half the time and the page shows `SESSION_EXPIRED` for a session that
+  exists. `min_machines_running = 1` is a floor, not a cap — `fly launch`
+  provisions two by default, so run `fly scale count 1`. Scaling out needs a
+  shared session store first.
 
 ## Testing against a real wallet
 
