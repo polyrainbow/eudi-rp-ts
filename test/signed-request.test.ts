@@ -44,6 +44,7 @@ before(async () => {
       territories: [],
       lotlSigningAnchorsPem: undefined,
       insecureSkipSignatureCheck: false,
+      checkStatus: false,
     },
   };
 

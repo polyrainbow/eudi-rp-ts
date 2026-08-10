@@ -27,7 +27,10 @@ export type ReasonCode =
   | 'SESSION_UNKNOWN'
   | 'SESSION_EXPIRED'
   // Trust list retrieval (Phase 2)
-  | 'TRUST_LIST_UNAVAILABLE';
+  | 'TRUST_LIST_UNAVAILABLE'
+  // Revocation
+  | 'CREDENTIAL_REVOKED'
+  | 'STATUS_UNAVAILABLE';
 
 export type Rejected = {
   verified: false;

@@ -61,6 +61,12 @@ export type TrustConfig = {
   lotlSigningAnchorsPem: string | undefined;
   /** Skip verifying the trust list signature. Never enable outside development. */
   insecureSkipSignatureCheck: boolean;
+  /**
+   * Check each credential's status list. On by default; accepting a credential
+   * whose revocation status you did not check is accepting a revoked one.
+   * Turn off only for an offline demo, and say so.
+   */
+  checkStatus: boolean;
 };
 
 const EU_LOTL = 'https://ec.europa.eu/tools/lotl/eu-lotl.xml';
@@ -116,6 +122,7 @@ export function loadConfig(): Config {
       territories: (env('LOTL_TERRITORIES') ?? '').split(',').filter(Boolean),
       lotlSigningAnchorsPem: envPem('LOTL_SIGNING_ANCHORS'),
       insecureSkipSignatureCheck: env('LOTL_INSECURE_SKIP_SIGNATURE_CHECK') === 'true',
+      checkStatus: env('STATUS_CHECK') !== 'false',
     },
   };
 

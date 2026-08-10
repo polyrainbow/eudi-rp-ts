@@ -15,7 +15,7 @@ TypeScript directly.
 
 ```bash
 npm install
-npm test                      # 37 tests, fully offline
+npm test                      # 45 tests, fully offline
 RUN_NETWORK_TESTS=1 npm test  # also verifies the live EU trust lists
 npm start                     # http://localhost:3000
 ```
@@ -81,6 +81,7 @@ src/http/                 server, session store
 | `ACCESS_CERT_CHAIN_FILE` / `ACCESS_CERT_KEY_FILE` | — | Required for `x509_san_dns`; signs the request object. |
 | `ACCESS_CERT_CHAIN_PEM` / `ACCESS_CERT_KEY_PEM` | — | Same, inline. For hosts with no filesystem for secrets. |
 | `REQUESTED_VCT` | `urn:eudi:pid:1` | Credential type to ask for. |
+| `STATUS_CHECK` | `true` | Verify each credential's status list. Set `false` only for an offline demo. |
 | `TRUST_MODE` | `pinned` | Or `lotl`. |
 | `TRUST_ANCHORS_FILE` / `TRUST_ANCHORS_PEM` | — | PEM anchors, required for `pinned`. Path or inline. |
 | `LOTL_URL` | EU LOTL | Trust list to fetch for `lotl`. |
@@ -121,7 +122,9 @@ reveals nothing else. A test asserts the verifier learns nothing more.
 
 ## Spec-compliant vs simplified
 
-**Compliant.** SD-JWT digests and disclosures (RFC 9901); SD-JWT VC media types
+**Compliant.** Token Status List revocation, including verifying the status
+list token's own signature against the same trust anchors; SD-JWT digests and
+disclosures (RFC 9901); SD-JWT VC media types
 `dc+sd-jwt` and transitional `vc+sd-jwt` (draft-18); OID4VP 1.0 request and
 response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 `sd_hash`, `nonce`, and `aud` equal to the full prefixed Client Identifier
@@ -130,10 +133,9 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 
 **Simplified, deliberately.**
 
-- **No revocation.** No CRL, no OCSP, and SD-JWT VC status list checking is off
-  (`disableStatusVerification`). This is the biggest gap, and not a theoretical
-  one: the real credential in `test/fixtures/real/` carries a `status` claim
-  pointing at a token status list, and a test asserts we currently ignore it.
+- **No CRL or OCSP** for the issuer's certificate chain. Credential revocation
+  via Token Status List **is** checked (see below); certificate revocation is
+  not.
 - **Certificate path validation is partial.** Signature linkage and validity
   windows are checked; name constraints, path length, key usage, EKU and
   certificate policies are not.
@@ -142,6 +144,24 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
   against the credential date, no qualifier processing, no `Sie` extensions.
 - **Sessions are in memory.** Restarting drops in-flight sessions.
 - **ES256 only**, matching what the reference issuer advertises.
+
+## Revocation
+
+A credential's `status.status_list` names a URI and an index; the URI serves a
+signed token holding a bitstring, and the bit at that index says whether the
+credential is still valid. The EU reference issuer publishes one for every PID.
+
+`@sd-jwt/sd-jwt-vc` drives this but leaves fetching **and verifying the list's
+own signature** to the relying party — it refuses to proceed without a
+`statusVerifier`, which is the right call: an unauthenticated status list would
+let anyone who can answer an HTTP request declare a revoked credential valid.
+`src/trust/status.ts` chains the list's `x5c` to the same trust anchors as the
+credential, and checks its `typ` is `statuslist+jwt` so a credential cannot be
+replayed as its own status list.
+
+**It fails closed.** An unreachable or unverifiable status list is
+`STATUS_UNAVAILABLE`, not a pass — a verifier that accepts what it could not
+check has no revocation at all.
 
 ## Three things the libraries do not do
 

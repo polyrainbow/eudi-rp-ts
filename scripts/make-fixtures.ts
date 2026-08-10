@@ -16,6 +16,7 @@ import { SDJwtVcInstance } from '@sd-jwt/sd-jwt-vc';
 import { webcrypto } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { StatusList, createHeaderAndPayload } from '@owf/token-status-list';
 import { base64urlEncode, hasher } from '../src/crypto.ts';
 
 x509.cryptoProvider.set(webcrypto as never);
@@ -113,6 +114,40 @@ const DISCLOSURE_FRAME = {
   _sd: ['family_name', 'given_name', 'birthdate', 'issuing_authority'],
   age_equal_or_over: { _sd: ['14', '16', '18', '21', '65'] },
 } as const;
+
+/** Index this fixture occupies in the status list. */
+const STATUS_INDEX = 7;
+const STATUS_URI = 'https://issuer.example/status/1';
+
+/**
+ * A signed Token Status List, so revocation can be tested offline.
+ *
+ * Signed by the same key and carrying the same x5c as the credential, which is
+ * what the real EU issuer does — and what makes the list trustworthy rather
+ * than merely fetchable.
+ */
+async function statusListJwt(
+  signingKey: webcrypto.CryptoKey,
+  x5c: string[],
+  revokedIndex: number | undefined,
+): Promise<string> {
+  const list = new StatusList(new Array(64).fill(0), 1);
+  if (revokedIndex !== undefined) list.setStatus(revokedIndex, 1);
+
+  const { header, payload } = createHeaderAndPayload(
+    list,
+    { iss: 'https://issuer.example', sub: STATUS_URI, iat: Math.floor(ISSUED_AT.getTime() / 1000) },
+    { alg: 'ES256', typ: 'statuslist+jwt', x5c } as never,
+  );
+
+  const signingInput = `${base64urlEncode(Buffer.from(JSON.stringify(header)))}.${base64urlEncode(
+    Buffer.from(JSON.stringify(payload)),
+  )}`;
+  const signature = base64urlEncode(
+    new Uint8Array(await webcrypto.subtle.sign(SIGN, signingKey, new TextEncoder().encode(signingInput))),
+  );
+  return `${signingInput}.${signature}`;
+}
 
 const DISCLOSURE_FRAME_NO_AGE = {
   _sd: ['family_name', 'given_name', 'birthdate', 'issuing_authority'],
@@ -218,6 +253,14 @@ async function main() {
     kb: false,
   });
 
+  const withStatus = await issueAndPresent({
+    signingKey: issuer.keys.privateKey,
+    header,
+    payload: { ...pidPayload(holderJwk, true), status: { status_list: { idx: STATUS_INDEX, uri: STATUS_URI } } },
+    frame: DISCLOSURE_FRAME,
+    present: onlyAge18,
+  });
+
   const untrusted = await issueAndPresent({
     signingKey: rogueIssuer.keys.privateKey,
     header: { x5c: [
@@ -246,7 +289,22 @@ async function main() {
         // wallet and mint a Key Binding JWT for a live nonce and audience.
         holderPrivateJwk,
         issued: { over18: over18.issued },
+        statusIndex: STATUS_INDEX,
+        statusUri: STATUS_URI,
+        statusLists: {
+          valid: await statusListJwt(issuer.keys.privateKey, x5c(issuer.cert), undefined),
+          revoked: await statusListJwt(issuer.keys.privateKey, x5c(issuer.cert), STATUS_INDEX),
+          untrustedSigner: await statusListJwt(
+            rogueIssuer.keys.privateKey,
+            [
+              Buffer.from(rogueIssuer.cert.rawData).toString('base64'),
+              Buffer.from(rogueCa.cert.rawData).toString('base64'),
+            ],
+            undefined,
+          ),
+        },
         credentials: {
+          withStatus: withStatus.presented,
           over18: over18.presented,
           under18: under18.presented,
           birthdateOnly: birthdateOnly.presented,

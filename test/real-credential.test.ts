@@ -21,7 +21,18 @@ const anchors = TrustAnchors.fromPem(readFileSync(`${dir}eudiw-pid-issuer-ca.pem
 const NOW = new Date('2026-09-01T00:00:00Z');
 
 /** It was issued, never presented, so it carries no Key Binding JWT. */
-const options = { credential, anchors, expectedVct: 'urn:eudi:pid:1', requireKeyBinding: false, now: NOW };
+/**
+ * `checkStatus: false` keeps these offline. The real status list is exercised
+ * separately, network-gated, at the bottom of this file.
+ */
+const options = {
+  credential,
+  anchors,
+  expectedVct: 'urn:eudi:pid:1',
+  requireKeyBinding: false,
+  checkStatus: false,
+  now: NOW,
+};
 
 describe('real EUDI reference credential', () => {
   it('verifies against the real PID Issuer CA', async () => {
@@ -53,15 +64,15 @@ describe('real EUDI reference credential', () => {
     assert.ok(!('age_equal_or_over' in result.value.claims));
   });
 
-  it('carries revocation information we do not yet check', async () => {
+  it('carries a token status list', async () => {
     const result = await verifyCredential(options);
     assert.equal(result.verified, true);
 
-    // Documented gap: status list verification is disabled. Real credentials
-    // do carry a status claim, so this is a live shortcoming rather than a
-    // theoretical one.
-    const status = result.value.claims['status'] as { status_list?: { uri?: string } } | undefined;
+    const status = result.value.claims['status'] as
+      | { status_list?: { uri?: string; idx?: number } }
+      | undefined;
     assert.ok(status?.status_list?.uri, 'reference credentials carry a token status list');
+    assert.equal(typeof status.status_list.idx, 'number');
   });
 
   it('would reject the holder as under 18 if the birth date said so', () => {
@@ -107,6 +118,7 @@ describe('real credential over OID4VP', { skip: expired ? `credential expired ${
         territories: [],
         lotlSigningAnchorsPem: undefined,
         insecureSkipSignatureCheck: false,
+        checkStatus: false,
       },
     };
 
@@ -132,6 +144,8 @@ describe('real credential over OID4VP', { skip: expired ? `credential expired ${
         audience: params.get('client_id')!,
         presentationFrame: { birthdate: true },
       });
+      // NOTE: the server checks the status list, so this leg does reach the
+      // issuer's status endpoint. Skipped when offline.
 
       const posted = await fetch(params.get('response_uri')!.replace('https://verifier.test', local), {
         method: 'POST',
@@ -152,6 +166,29 @@ describe('real credential over OID4VP', { skip: expired ? `credential expired ${
       assert.equal(outcome.result['vct'], 'urn:eudi:pid:1');
     } finally {
       server.close();
+    }
+  });
+});
+
+
+describe('real status list (network)', { skip: process.env['RUN_NETWORK_TESTS'] === '1' ? false : 'set RUN_NETWORK_TESTS=1' }, () => {
+  it('fetches and verifies the issuer\'s live status list', async () => {
+    // Exercises the whole path against real infrastructure: fetch with the
+    // statuslist+jwt content type, verify the list's own signature against the
+    // same PID Issuer CA, and read the bit for this credential.
+    const result = await verifyCredential({
+      credential,
+      anchors,
+      expectedVct: 'urn:eudi:pid:1',
+      requireKeyBinding: false,
+      checkStatus: true,
+      now: new Date(),
+    });
+
+    // Either it is still valid, or the issuer has revoked it since — both
+    // prove the list was fetched, authenticated and read.
+    if (!result.verified) {
+      assert.equal(result.reason, 'CREDENTIAL_REVOKED', result.detail);
     }
   });
 });

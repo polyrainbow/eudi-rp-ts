@@ -83,6 +83,7 @@ export async function verifyPresentationResponse(
     credential: credential.value,
     anchors: context.anchors,
     expectedVct: context.config.requestedVct,
+    checkStatus: context.config.trust.checkStatus,
     keyBinding: { nonce: context.nonce, audience },
   });
 }

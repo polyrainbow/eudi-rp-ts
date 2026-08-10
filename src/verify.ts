@@ -14,6 +14,7 @@ import { type AgeResult, evaluateAgeOver18 } from './predicate/age.ts';
 export type { AgeResult };
 import type { TrustAnchors } from './trust/anchors.ts';
 import { resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
+import { createStatusChecker } from './trust/status.ts';
 
 /**
  * SD-JWT VC media types accepted in the `typ` header.
@@ -45,6 +46,15 @@ export type VerifyCredentialOptions = {
   keyBinding?: KeyBindingExpectation;
   /** Only set false for issuer-side checks; a presentation must be bound. */
   requireKeyBinding?: boolean;
+  /**
+   * Check the credential's status list. On by default: a credential carrying a
+   * `status` claim that we do not check is a credential we might be accepting
+   * after revocation. Requires network access to the issuer's status endpoint,
+   * so tests that must stay offline turn it off explicitly.
+   */
+  checkStatus?: boolean;
+  /** Injectable fetch for status list retrieval, for tests. */
+  statusFetch?: typeof fetch;
   now?: Date;
 };
 
@@ -91,8 +101,17 @@ export async function verifyCredential(
   let issuerSignatureOk = false;
   let keyBindingSignatureOk = false;
 
+  const checkStatus = options.checkStatus ?? true;
+  const status = createStatusChecker({
+    anchors: options.anchors,
+    now,
+    ...(options.statusFetch ? { fetchImpl: options.statusFetch } : {}),
+  });
+
   const sdjwt = new SDJwtVcInstance({
     hasher,
+    statusListFetcher: status.statusListFetcher,
+    statusVerifier: status.statusVerifier,
     verifier: (data, sig) => {
       issuerSignatureOk = verifyEs256(issuer.value.publicKey, data, sig);
       return issuerSignatureOk;
@@ -111,8 +130,9 @@ export async function verifyCredential(
       currentDate: Math.floor(now.getTime() / 1000),
       // Supplying the nonce is what makes @sd-jwt verify the KB-JWT at all.
       ...(options.keyBinding ? { keyBindingNonce: options.keyBinding.nonce } : {}),
-      // Phase 1 is offline. Status list checking arrives with Phase 2.
-      disableStatusVerification: true,
+      // A credential with a `status` claim that we skip is one we could be
+      // accepting after revocation.
+      disableStatusVerification: !checkStatus,
     });
   } catch (error) {
     return mapLibraryError(error, { issuerSignatureOk, keyBindingSignatureOk, requireKeyBinding });
@@ -193,6 +213,13 @@ function mapLibraryError(
   }
   if (/not yet valid/i.test(message)) return reject('CREDENTIAL_NOT_YET_VALID', message);
   if (/expired/i.test(message)) return reject('CREDENTIAL_EXPIRED', message);
+  // Status list outcomes, before the generic signature and key binding tests:
+  // "Status is not valid" is the library's wording for a set revocation bit.
+  if (/Status is not valid/i.test(message)) {
+    return reject('CREDENTIAL_REVOKED', 'The issuer has revoked this credential');
+  }
+  if (/status list/i.test(message)) return reject('STATUS_UNAVAILABLE', message);
+
   if (/Key Binding JWT not exist/i.test(message)) return reject('KEY_BINDING_MISSING', message);
   if (/Invalid Nonce/i.test(message)) return reject('KEY_BINDING_NONCE_MISMATCH', message);
   if (/sd_hash|Key Binding|Signature is not valid/i.test(message)) {
