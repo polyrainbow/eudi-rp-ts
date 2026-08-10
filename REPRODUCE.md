@@ -27,7 +27,7 @@ The results below were produced on:
 | | |
 |---|---|
 | Date | **2026-08-09** (SD-JWT VC) and **2026-08-10** (mdoc, trust lists, deployment) |
-| Commit | `66bfb50` |
+| Commit | `8dad482` and later; x509_hash support added afterwards |
 | Runtime | Node **v24.15.0**, npm 11.12.1 |
 | Platform | macOS (Darwin 25.6.0), arm64 |
 | Issuer | `https://issuer.eudiw.dev` / `https://backend.issuer.eudiw.dev` |
@@ -50,7 +50,7 @@ The SD-JWT VC draft is not an RFC, so its details can still move.
 ```bash
 git clone https://github.com/polyrainbow/eudi-rp-ts && cd eudi-rp-ts
 npm ci
-npm test          # 88 tests, no network
+npm test          # 94 tests, no network
 npm run typecheck
 ```
 
@@ -222,9 +222,16 @@ rather than inferred:
 | Response encryption metadata | `encrypted_response_enc_values_supported`; the pre-1.0 `authorization_encrypted_response_alg`/`_enc` appear **zero times** in OID4VP 1.0 |
 | PID DS certificate EKUs | `1.0.18013.5.1.2`, `1.0.23220.4.1.2` |
 
-The `x509_hash` and URI-SAN observations matter: this library implements
-`x509_san_dns` and `redirect_uri`. If an issued access certificate follows the
-reference verifier's pattern, `x509_hash` would be needed too.
+The `x509_hash` rule is implemented and pinned by a fixed test vector: hashing
+`test/fixtures/real/eudiw-verifier-leaf.pem` reproduces
+`x509_hash:FTTP4DJV_P7icSZwBAo8cifSpYy8Sph0K1gZdbmaQh4`, the identifier that
+certificate was advertised with. To repeat the live check:
+
+```bash
+curl -s https://registry.serviceproviders.eudiw.dev/authentication   # QR_code_url
+# fetch its request_uri, then:
+#   sha256(DER of x5c[0]) base64url  ==  the client_id after "x509_hash:"
+```
 
 ## Time-sensitive material
 

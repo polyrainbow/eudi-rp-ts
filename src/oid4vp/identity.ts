@@ -1,3 +1,5 @@
+import { X509Certificate, createHash } from 'node:crypto';
+
 /**
  * Who this verifier is, on the wire.
  *
@@ -5,7 +7,7 @@
  * application decides where these values come from (environment, database,
  * per-tenant lookup), and the library only needs the answers.
  */
-export type ClientIdPrefix = 'redirect_uri' | 'x509_san_dns';
+export type ClientIdPrefix = 'redirect_uri' | 'x509_san_dns' | 'x509_hash';
 
 export type VerifierIdentity = {
   /** Public https base URL the wallet reaches. */
@@ -13,7 +15,13 @@ export type VerifierIdentity = {
   /** Scheme used to invoke the wallet, e.g. `eudi-openid4vp://`. */
   walletScheme: string;
   clientIdPrefix: ClientIdPrefix;
-  /** DNS name in the access certificate's SAN. Required for `x509_san_dns`. */
+  /**
+   * DNS name in the access certificate's SAN. Required for `x509_san_dns`.
+   *
+   * Not used by `x509_hash`, which derives the identifier from the certificate
+   * itself — useful when the certificate you are issued carries a URI SAN, or
+   * none, rather than a dNSName. The EU reference verifier identifies this way.
+   */
   clientDnsName: string | undefined;
   /** Access certificate chain and key, PEM. Required for `x509_san_dns`. */
   accessCertificateChainPem: string | undefined;
@@ -37,9 +45,34 @@ export type VerifierIdentity = {
  * that was actually sent rather than recomputing it.
  */
 export function clientId(identity: VerifierIdentity, responseUri: string): string {
-  return identity.clientIdPrefix === 'x509_san_dns'
-    ? `x509_san_dns:${identity.clientDnsName}`
-    : `redirect_uri:${responseUri}`;
+  switch (identity.clientIdPrefix) {
+    case 'x509_san_dns':
+      return `x509_san_dns:${identity.clientDnsName}`;
+    case 'x509_hash':
+      if (!identity.accessCertificateChainPem) {
+        throw new Error('x509_hash requires the access certificate chain');
+      }
+      return `x509_hash:${x509Hash(identity.accessCertificateChainPem)}`;
+    default:
+      return `redirect_uri:${responseUri}`;
+  }
+}
+
+/**
+ * The `x509_hash` identifier for a certificate chain.
+ *
+ * OID4VP 1.0 §5.10: "the base64url-encoded value of the SHA-256 hash of the
+ * DER-encoded X.509 certificate" — the leaf, which is the first entry.
+ *
+ * Verified against the live EU reference verifier: hashing its published leaf
+ * reproduces the `client_id` it advertises. See REPRODUCE.md.
+ */
+export function x509Hash(chainPem: string): string {
+  const leaf = /-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/.exec(chainPem)?.[0];
+  if (!leaf) throw new Error('No certificate found in the access certificate chain');
+
+  const der = new X509Certificate(leaf).raw;
+  return createHash('sha256').update(der).digest('base64url');
 }
 
 /** Where the wallet posts the response for a given session. */

@@ -36,8 +36,12 @@ export type BuiltRequest = {
  *
  * `x509_san_dns` — the request MUST be signed, with the access certificate
  * chain in the JAR's `x5c` header and the DNS name matching a dNSName SAN in
- * the leaf. This is what the EUDI reference verifier uses, and what a real
- * wallet will accept.
+ * the leaf.
+ *
+ * `x509_hash` — the same signed request, but the identifier is the SHA-256 of
+ * the leaf rather than a name inside it. This is how the EU reference verifier
+ * identifies itself, and it is the option to reach for when the certificate you
+ * are issued carries a URI SAN, or none, instead of a dNSName.
  */
 export async function buildAuthorizationRequest(config: VerifierIdentity): Promise<BuiltRequest> {
   const nonce = b64url(generateRandom(32));
@@ -48,7 +52,7 @@ export async function buildAuthorizationRequest(config: VerifierIdentity): Promi
   // belongs to before we can decrypt it.
   const responseId = b64url(generateRandom(16));
   const responseUrl = responseUri(config, responseId);
-  const signed = config.clientIdPrefix === 'x509_san_dns';
+  const signed = config.clientIdPrefix === 'x509_san_dns' || config.clientIdPrefix === 'x509_hash';
 
   // With direct_post.jwt the wallet encrypts the response to a key we publish
   // in client_metadata. It is ephemeral and per-session on purpose.

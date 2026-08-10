@@ -17,7 +17,7 @@ Node runs the TypeScript as-is.
 
 ```bash
 npm install
-npm test                      # 88 tests, fully offline
+npm test                      # 94 tests, fully offline
 RUN_NETWORK_TESTS=1 npm test  # also verifies the live EU trust lists
 npm start                     # http://localhost:3000
 ```
@@ -112,8 +112,8 @@ deploy it as-is; use the library inside your own service.
 | `PORT` | `3000` | Listen port (plain HTTP). |
 | `BASE_URL` | `https://localhost:3000` | Public https URL wallets reach. **Set this.** |
 | `WALLET_SCHEME` | `eudi-openid4vp://` | Deep-link scheme. What the live EUDI reference infrastructure emits; its verifier README documents `haip-vp://`. |
-| `CLIENT_ID_PREFIX` | `redirect_uri` | Or `x509_san_dns`. |
-| `CLIENT_DNS_NAME` | — | Required for `x509_san_dns`; must match a dNSName SAN in the leaf. |
+| `CLIENT_ID_PREFIX` | `redirect_uri` | Or `x509_san_dns`, or `x509_hash`. |
+| `CLIENT_DNS_NAME` | — | Required for `x509_san_dns` only; must match a dNSName SAN in the leaf. `x509_hash` needs no name. |
 | `ACCESS_CERT_CHAIN_FILE` / `ACCESS_CERT_KEY_FILE` | — | Required for `x509_san_dns`; signs the request object. |
 | `ACCESS_CERT_CHAIN_PEM` / `ACCESS_CERT_KEY_PEM` | — | Same, inline. For hosts with no filesystem for secrets. |
 | `REQUESTED_VCT` | `urn:eudi:pid:1` | Credential type to ask for. |
@@ -128,16 +128,24 @@ deploy it as-is; use the library inside your own service.
 **Pointing at a different wallet**: change `WALLET_SCHEME`. **A different trust
 list**: `LOTL_URL` plus `LOTL_SERVICE_TYPES`.
 
-### Two client identifier modes
+### Three client identifier modes
 
 `redirect_uri` (default) — the Client Identifier *is* the response URI, and the
 request MUST NOT be signed, because the wallet has no way to obtain a trusted
 key for it. Needs no PKI, so the demo starts with one command.
 
 `x509_san_dns` — the request MUST be signed, with the access certificate chain
-in the JAR `x5c` header. This is what the EUDI reference verifier uses and what
-a real wallet will accept. Response encryption (`direct_post.jwt`) turns on with
-it, using a per-session ephemeral key.
+in the JAR `x5c` header, and the DNS name must match a dNSName SAN in the leaf.
+
+`x509_hash` — the same signed request, but the identifier is the base64url
+SHA-256 of the DER leaf certificate rather than a name inside it. **This is how
+the EU reference verifier identifies itself**, and it is what to reach for when
+the certificate you are issued carries a URI SAN, or none, instead of a dNSName
+— which is exactly what the reference verifier's certificate does. A test pins
+our implementation against that certificate and the identifier it published.
+
+Both x509 modes turn on response encryption (`direct_post.jwt`) with a
+per-session ephemeral key.
 
 ## Claim encoding
 
@@ -319,14 +327,10 @@ All handled in `src/`; all easy to get wrong by assuming otherwise.
 - **`/.well-known/jwt-vc-issuer` is unsupported** by the reference issuer (HTTP
   400, "Not supported"), so `x5c` is the only key-resolution route that works
   against real EU infrastructure today. Only `x5c` is implemented.
-- **The reference verifier uses `x509_hash`, not `x509_san_dns`.** A live
-  authorization request from `verifier-backend.eudiw.dev` carries
-  `client_id=x509_hash:FTTP4DJV_…`, and its signing certificate's SAN is a
-  **URI** (`URI:https://verifier-backend.eudiw.dev/`), not a dNSName. If the
-  certificate the registration service issues follows that pattern, our
-  `x509_san_dns` mode will not match it and we would need `x509_hash` (client id
-  is the base64url SHA-256 of the leaf) or `x509_san_uri`. Neither is
-  implemented. Check the SAN on the issued certificate before assuming:
+- **`x509_san_uri` is still not implemented.** `x509_hash` now is, which covers
+  the reference verifier's pattern (a URI SAN, identified by certificate hash).
+  If an issued access certificate needs a URI *name* rather than a hash, that
+  third mode would be required. Check what you are issued before assuming:
   `openssl x509 -noout -text -in access-cert-chain.pem | grep -A1 'Alternative Name'`.
 - **The eIDAS LOTL is not a registry of PID Providers.** It lists qualified
   trust service providers. EUDI provider lists are published separately, per

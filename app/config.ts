@@ -65,8 +65,9 @@ export function loadConfig(): Config {
   const baseUrl = (env('BASE_URL') ?? `https://localhost:${port}`).replace(/\/$/, '');
   const clientIdPrefix = (env('CLIENT_ID_PREFIX') ?? 'redirect_uri') as ClientIdPrefix;
 
-  if (clientIdPrefix !== 'redirect_uri' && clientIdPrefix !== 'x509_san_dns') {
-    throw new Error(`CLIENT_ID_PREFIX must be redirect_uri or x509_san_dns, got ${clientIdPrefix}`);
+  const prefixes: ClientIdPrefix[] = ['redirect_uri', 'x509_san_dns', 'x509_hash'];
+  if (!prefixes.includes(clientIdPrefix)) {
+    throw new Error(`CLIENT_ID_PREFIX must be one of ${prefixes.join(', ')}, got ${clientIdPrefix}`);
   }
 
   const config: Config = {
@@ -95,16 +96,18 @@ export function loadConfig(): Config {
     },
   };
 
-  if (clientIdPrefix === 'x509_san_dns') {
-    // A signed request object is mandatory for this prefix, so the key material
-    // is not optional. Fail at startup rather than at the first wallet scan.
-    if (!config.clientDnsName) {
-      throw new Error('CLIENT_DNS_NAME is required when CLIENT_ID_PREFIX=x509_san_dns');
-    }
+  if (clientIdPrefix === 'x509_san_dns' || clientIdPrefix === 'x509_hash') {
+    // Both prefixes require a signed request object, so the key material is not
+    // optional. Fail at startup rather than at the first wallet scan.
     if (!config.accessCertificateChainPem || !config.accessCertificatePrivateKeyPem) {
       throw new Error(
-        'ACCESS_CERT_CHAIN_{FILE,PEM} and ACCESS_CERT_KEY_{FILE,PEM} are required when CLIENT_ID_PREFIX=x509_san_dns',
+        `ACCESS_CERT_CHAIN_{FILE,PEM} and ACCESS_CERT_KEY_{FILE,PEM} are required when CLIENT_ID_PREFIX=${clientIdPrefix}`,
       );
+    }
+    // Only x509_san_dns needs a name; x509_hash derives its identifier from
+    // the certificate, which is why it works with a URI SAN or none at all.
+    if (clientIdPrefix === 'x509_san_dns' && !config.clientDnsName) {
+      throw new Error('CLIENT_DNS_NAME is required when CLIENT_ID_PREFIX=x509_san_dns');
     }
   }
   if (config.trust.mode === 'pinned' && !config.trust.pinnedAnchorsPem) {

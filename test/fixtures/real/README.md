@@ -19,6 +19,13 @@ this credential and exists nowhere else; publishing it lets the test suite mint
 Key Binding JWTs and run a genuine credential through the full presentation
 path. It protects nothing.
 
+`eudiw-verifier-leaf.pem` and `eudiw-verifier-client-id.txt` are a different
+kind of artefact: the certificate `verifier-backend.eudiw.dev` signed an
+authorization request with on 2026-08-10, and the `x509_hash` client identifier
+it advertised alongside it. They are a fixed test vector for
+`src/oid4vp/identity.ts` — hashing fixed bytes gives a fixed answer, so the test
+neither depends on the live service nor rots when that certificate rotates.
+
 The subject data is synthetic — "Test Tester", born 1990-06-12, PT — entered
 into the issuer's own test form. The issuer is a testing issuer and says so on
 its front page. Nothing here identifies a real person.
