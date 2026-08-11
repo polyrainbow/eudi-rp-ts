@@ -1,0 +1,52 @@
+name: Release
+
+# Publishing from CI rather than a laptop is what makes npm provenance possible:
+# the registry records which workflow, at which commit, produced the tarball. For
+# a package that other people's trust decisions run through, "built from this
+# public commit" is worth more than the version number.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write # required for --provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      # The tag is the release record. If it disagrees with package.json, one of
+      # the two is wrong, and finding out after publishing is expensive: npm
+      # versions are immutable.
+      - name: Tag matches package.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(npm pkg get version | tr -d '"')"
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag ${GITHUB_REF_NAME} implies version ${tag}, package.json says ${pkg}" >&2
+            exit 1
+          fi
+
+      # Same gates as CI, re-run here rather than trusted from the branch build:
+      # a tag can point at a commit CI never saw.
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run check:package
+
+      # `prepack` builds again; that is npm's contract and cheap enough to leave.
+      # `access` comes from publishConfig in package.json.
+      - run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

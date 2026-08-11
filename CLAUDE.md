@@ -14,6 +14,7 @@ node --test --test-name-pattern='nonce' test/verify.test.ts   # a single test
 RUN_NETWORK_TESTS=1 npm test              # also hits the live EU trust lists and status lists
 npm run typecheck                         # tsc --noEmit over src, test, scripts
 npm run build                             # tsc -p tsconfig.build.json -> dist/ with declarations
+npm run check:package                     # assert the publish tarball ships dist/ and no key material
 npm start                                 # the demo app on :3000 (see README for env vars)
 npm run fixtures                          # regenerate test/fixtures/ (output is committed)
 npm run access-cert -- verifier.example.org   # dev access certificate into config/

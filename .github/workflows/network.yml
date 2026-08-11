@@ -1,0 +1,34 @@
+name: Live EU infrastructure
+
+# The offline suite proves the verification logic. This one proves the claims in
+# REPRODUCE.md still hold against systems nobody here controls: that the EU List
+# of Trusted Lists still verifies, and that the reference issuer's status list is
+# still reachable and signed by an anchor we trust.
+#
+# It runs on a schedule rather than on every push for two reasons. A failure here
+# is news about the EU deployment, not about the commit that triggered it — and
+# every push re-fetching ~20 MB of national trust lists would be abusive toward
+# the people hosting them.
+on:
+  schedule:
+    # Mondays, off the hour: scheduled runs on the hour queue behind everybody
+    # else's.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  network:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - run: npm test
+        env:
+          RUN_NETWORK_TESTS: '1'
