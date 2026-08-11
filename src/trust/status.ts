@@ -43,9 +43,16 @@ export type StatusCheckOptions = {
  * The TTL is the window in which a revocation is not yet visible, so it trades
  * freshness against load on the issuer. Five minutes is a starting point, not
  * a recommendation for every deployment.
+ *
+ * Failures are cached too, briefly. Status checking fails closed, so an issuer
+ * whose endpoint is down rejects every credential it issued either way — but
+ * without a negative TTL each of those rejections first waits out the full
+ * request timeout and holds a socket, which turns the issuer's outage into an
+ * outage here. Thirty seconds bounds the retry rate while still recovering
+ * promptly once the endpoint returns.
  */
-export function createStatusListCache(ttlMs = 5 * 60_000): TtlCache<string> {
-  return new TtlCache<string>({ ttlMs });
+export function createStatusListCache(ttlMs = 5 * 60_000, errorTtlMs = 30_000): TtlCache<string> {
+  return new TtlCache<string>({ ttlMs, errorTtlMs });
 }
 
 /**

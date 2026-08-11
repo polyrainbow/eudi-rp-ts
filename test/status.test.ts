@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { Outcome, ReasonCode, Rejected } from '../src/result.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
+import { createStatusListCache } from '../src/trust/status.ts';
 import { verifyAgeOver18 } from '../src/verify.ts';
 
 const dir = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -107,5 +108,24 @@ describe('status list', () => {
     fetched = false;
     await verifyAgeOver18({ ...base, statusFetch: spy, checkStatus: false });
     assert.equal(fetched, false, 'checkStatus: false must skip the fetch');
+  });
+
+  it('does not refetch a dead status endpoint once per credential', async () => {
+    // Both verifications still fail closed; the point is that the second one
+    // does not pay another request and another timeout. A shared cache is what
+    // keeps an issuer's outage from becoming one here.
+    const cache = createStatusListCache();
+    let requests = 0;
+    const down: typeof fetch = (async () => {
+      requests += 1;
+      return new Response('', { status: 503 });
+    }) as typeof fetch;
+
+    const first = await verifyAgeOver18({ ...base, statusFetch: down, statusCache: cache });
+    const second = await verifyAgeOver18({ ...base, statusFetch: down, statusCache: cache });
+
+    assertRejected(first, 'STATUS_UNAVAILABLE');
+    assertRejected(second, 'STATUS_UNAVAILABLE');
+    assert.equal(requests, 1, 'the second verification must reuse the remembered failure');
   });
 });

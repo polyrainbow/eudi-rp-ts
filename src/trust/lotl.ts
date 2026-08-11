@@ -234,13 +234,24 @@ export function parseServiceCertificates(xml: string, serviceTypes: string[]): X
   return certificates;
 }
 
+/**
+ * Headroom over the largest list actually published.
+ *
+ * Germany's was 5.4 MB on 2026-08-11, the largest of the set; see REPRODUCE.md.
+ * The general ceiling in `fetching.ts` is sized for status lists and would leave
+ * a growing national list less than a factor of two before it broke.
+ */
+const TRUST_LIST_MAX_BYTES = 20_000_000;
+
 async function fetchText(doFetch: typeof fetch, url: string): Promise<string> {
   // Trust lists are fetched from 40-odd national endpoints; one that never
-  // answers must not stall startup indefinitely.
+  // answers must not stall startup indefinitely. A list that trips the size
+  // limit, the redirect budget or the https-only policy is recorded in
+  // `failures` rather than failing the whole run.
   const { body } = await fetchWithTimeout(url, {
-    redirect: 'follow',
     fetchImpl: doFetch,
     timeoutMs: DEFAULT_TIMEOUT_MS * 3,
+    maxBytes: TRUST_LIST_MAX_BYTES,
   });
   return body;
 }

@@ -35,8 +35,17 @@ export type { PathValidationOptions, ResolvedIssuer } from './trust/issuer-key.t
 export { createStatusChecker, createStatusListCache } from './trust/status.ts';
 export type { StatusCheckOptions, StatusChecker, StatusOutcome } from './trust/status.ts';
 
-// Outbound HTTP with a deadline, and a TTL cache for status and trust lists.
-export { DEFAULT_TIMEOUT_MS, TtlCache, fetchText } from './fetching.ts';
+// Outbound HTTP with a deadline, a size limit, and a TTL cache for status and
+// trust lists. The defaults are policy, so they are exported to be read or
+// overridden rather than rediscovered.
+export {
+  DEFAULT_ALLOWED_PROTOCOLS,
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_REDIRECTS,
+  DEFAULT_TIMEOUT_MS,
+  TtlCache,
+  fetchText,
+} from './fetching.ts';
 export type { CacheOptions, FetchOptions } from './fetching.ts';
 
 // ISO/IEC 18013-5 mdoc, verified through the same trust layer.

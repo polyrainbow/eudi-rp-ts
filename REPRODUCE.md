@@ -171,6 +171,21 @@ pointers are filtered by MIME type.
 
 Trust lists change. A different count later is expected; a *failure* is not.
 
+Re-run on 2026-08-11 through `fetchTrustAnchors` itself rather than the raw
+`fetch` the network test uses, to check the same five lists against the size,
+redirect and https-only limits in `src/fetching.ts`: 860 anchors with no service
+type filter, no failures, every list reached over https without a redirect.
+Sizes that day, `curl -sL -o /dev/null -w '%{size_download}'`:
+
+| | bytes |
+|---|---|
+| `tl.bundesnetzagentur.de/TL-DE.XML` | 5 355 449 |
+| `tsl.digital.gob.es/TSL.xml` | 3 027 766 |
+| `eidas.agid.gov.it/TL/TSL-IT.xml` | 2 855 744 |
+
+Germany's is the largest of the set, which is where the 20 MB trust list ceiling
+comes from — the 10 MB general default would leave it under a factor of two.
+
 ## 4. Full OID4VP round trip
 
 Against a local server:

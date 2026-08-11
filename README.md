@@ -272,8 +272,24 @@ check has no revocation at all.
 
 Status lists cover many credentials, so pass a shared `statusCache`
 (`createStatusListCache()`) in anything serving traffic; without one every
-verification refetches the same document. All outbound requests carry a
-deadline, and concurrent misses on the same URL collapse into a single fetch.
+verification refetches the same document. Concurrent misses on the same URL
+collapse into a single fetch, and a *failed* fetch is remembered for 30 seconds
+— verification still fails closed either way, but without that the issuer's
+outage becomes one here, at one full timeout per credential.
+
+### What an outbound request is allowed to do
+
+Every URL this library fetches was read out of a document that arrived over the
+network — a status list URI from a credential, a national list location from the
+LOTL — so the limits are policy rather than plumbing. All of them are options on
+`fetchText`, and the defaults are exported.
+
+| | Default | Why |
+|---|---|---|
+| `timeoutMs` | 10 s | One deadline for the whole exchange, redirects included. |
+| `maxBytes` | 10 MB | A deadline bounds nothing alone: a body arriving steadily for ten seconds is still unbounded memory. Enforced while reading, not just against `Content-Length`. Trust lists ask for 20 MB — Germany's list is 5.4 MB. |
+| `maxRedirects` | 3 | The fetch specification allows twenty, which is far more indirection than any of these endpoints needs. |
+| `allowedProtocols` | `https:` only | Checked on every hop, so a redirect cannot walk off TLS. A trust list served over http cannot be forged — it is signature-checked — but it can be replayed, and a stale list still grants a CA that has since been withdrawn. |
 
 ## Using it in a service
 
