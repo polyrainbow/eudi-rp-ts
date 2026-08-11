@@ -45,8 +45,14 @@ jobs:
       - run: npm run build
       - run: npm run check:package
 
+      # No token. npm trusted publishing exchanges this job's OIDC identity for a
+      # short-lived credential, so there is no long-lived secret to store, rotate
+      # or leak. npm checks the claims against the publisher configured on the
+      # package: this repository, this workflow filename, and the `npm`
+      # environment declared above — rename either and the publish is refused.
+      #
       # `prepack` builds again; that is npm's contract and cheap enough to leave.
-      # `access` comes from publishConfig in package.json.
+      # `access` comes from publishConfig in package.json. Provenance is implied
+      # by trusted publishing and asked for anyway, so the intent survives a
+      # future move back to a token.
       - run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
