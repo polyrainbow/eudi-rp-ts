@@ -23,7 +23,17 @@ describe('fetchText', () => {
     // signal has to reach fetch itself, which is what this asserts.
     const hanging: typeof fetch = ((_url: string, init?: RequestInit) =>
       new Promise((_resolve, rejectPromise) => {
-        init?.signal?.addEventListener('abort', () => rejectPromise(new Error('aborted')));
+        // A real request holds a socket, which keeps the event loop alive.
+        // AbortSignal.timeout's own timer is unref'd on purpose, so a stub that
+        // merely waits leaves Node 22 with nothing pending and the loop exits
+        // before the abort ever fires. This timer stands in for the socket, and
+        // doubles as a backstop: if the signal never arrives, the test fails on
+        // the wrong message rather than hanging.
+        const socket = setTimeout(() => rejectPromise(new Error('the signal never arrived')), 1000);
+        init?.signal?.addEventListener('abort', () => {
+          clearTimeout(socket);
+          rejectPromise(new Error('aborted'));
+        });
       })) as typeof fetch;
 
     await assert.rejects(
