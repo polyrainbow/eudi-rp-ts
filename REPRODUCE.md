@@ -20,13 +20,17 @@ correctly, and they are not evidence of interoperability with anyone else's
 implementation. Getting a real wallet to present requires a Relying Party Access
 Certificate; see "Access certificates" in the README.
 
+That certificate in turn requires a PID already held in a wallet, so the first
+step is issuance, not presentation. Attempted 2026-08-11 and blocked — by the
+wallet build, not by the issuer. See section 5.
+
 ## Environment of record
 
 The results below were produced on:
 
 | | |
 |---|---|
-| Date | **2026-08-09** (SD-JWT VC) and **2026-08-10** (mdoc, trust lists, deployment) |
+| Date | **2026-08-09** (SD-JWT VC), **2026-08-10** (mdoc, trust lists, deployment), **2026-08-11** (issuance proof types, wallet provider, LOTE) |
 | Commit | `8dad482` and later; x509_hash support added afterwards |
 | Runtime | Node **v24.15.0**, npm 11.12.1 |
 | Platform | macOS (Darwin 25.6.0), arm64 |
@@ -207,6 +211,80 @@ about half the time and reports `SESSION_EXPIRED` for a session that exists.
 The access certificate there is self-minted (`npm run access-cert`). It exercises
 the signed-request path; no real wallet trusts it.
 
+## 5. Issuance proof types and the wallet provider
+
+Checked **2026-08-11**, prompted by the reference wallet failing to obtain a PID.
+None of this is used by the library — a relying party never issues — but it
+determines whether you can get a credential into a wallet at all, which is the
+prerequisite for everything in "Access certificates" in the README.
+
+The issuer advertises, for `eu.europa.ec.eudi.pid_vc_sd_jwt`:
+
+```json
+"proof_types_supported": {
+  "attestation": { "key_attestations_required": { "key_storage": ["iso_18045_high"],
+                   "user_authentication": ["iso_18045_high"] },
+                   "proof_signing_alg_values_supported": ["ES256"] },
+  "jwt":         { "key_attestations_required": { … same … } }
+}
+```
+
+**It does not enforce any of it.** `npm run fetch-credential -- sd-jwt` sends a
+plain `proof_type: jwt` over a freshly generated *software* key, with no key
+attestation at all, and receives HTTP 200 and a credential. A
+`proof_type: attestation` request also succeeds. Both were run on 2026-08-11.
+
+Key attestations are obtainable by anyone regardless, from the wallet provider:
+
+```bash
+curl -s -X POST https://wallet-provider.eudiw.dev/key-attestation/jwk-set \
+  -H 'Content-Type: application/json' \
+  -d '{"nonce":"","jwkSet":{"keys":[{"kty":"EC","crv":"P-256","x":"…","y":"…"}]}}'
+```
+
+That returns a `key-attestation+jwt` (claims: `iat`, `exp`, `attested_keys`,
+`key_storage`, `user_authentication`, `certification`, `nonce`,
+`key_storage_status`) for an arbitrary software key — so the
+`iso_18045_high` assertion is not evidence of anything about the key.
+`/wallet-instance-attestation/jwk` behaves the same way. Both paths exist on
+`wallet-provider.eudiw.dev` and `dev.wallet-provider.eudiw.dev`.
+
+### Why this breaks wallets
+
+A wallet-core build configured with `ClientAuthenticationType.None` has no
+`WalletKeyAttestationProvider`, so it cannot construct either proof type and
+**refuses client-side, before sending a credential request**:
+
+```
+E  Offered document requires attestation proof, but client authentication type is None
+D  Finished(issuedDocuments=[])
+```
+
+That is `eudi-lib-android-wallet-core`'s `SubmitRequest.kt` — the fall-through
+after the `ATTESTATION` and `JWT` branches, both of which require the provider.
+The token exchange succeeds first, so the failure looks like an issuer outage
+and is not one. A build using `ClientAuthenticationType.AttestationBased`
+(the upstream demo flavour uses `clientId = "eudiw-abca"` with
+`walletProviderHost = https://wallet-provider.eudiw.dev`) has the provider and
+gets past it.
+
+### The full chain a wallet performs
+
+Every step below returned HTTP 200 on 2026-08-11, driven directly rather than
+through a wallet, using the upstream app's configuration:
+
+| Step | Detail |
+|---|---|
+| PAR | `POST /oidc/pushed_authorization` → `request_uri`, `expires_in: 3600` |
+| Token | DPoP proof + `OAuth-Client-Attestation` / `-PoP` headers → `token_type: DPoP`, token carries `cnf.jkt` |
+| Nonce | `POST /nonce` → `c_nonce` |
+| Key attestation | wallet provider, nonce embedded |
+| Credential | `Authorization: DPoP …` plus a proof carrying `ath`, body `proof_type: attestation` → credential |
+
+The authorization server accepts DPoP and attestation-based client
+authentication even though it advertises only
+`token_endpoint_auth_methods_supported: ["public"]`.
+
 ## Observed facts about the reference infrastructure
 
 Recorded with dates because they will drift, and each was checked directly
@@ -222,6 +300,12 @@ rather than inferred:
 | Response encryption metadata | `encrypted_response_enc_values_supported`; the pre-1.0 `authorization_encrypted_response_alg`/`_enc` appear **zero times** in OID4VP 1.0 |
 | PID DS certificate EKUs | `1.0.18013.5.1.2`, `1.0.23220.4.1.2` |
 | `x509_san_uri` in OID4VP 1.0 Final | **absent** — present in draft-21 and draft-24, replaced by `x509_hash` |
+| Issuer signed metadata | served **only** under `Accept: application/jwt`; the default JSON carries no `signed_metadata` claim. `typ: openidvci-issuer-metadata+jwt`, signed by `CN=PY Issuer PreProd` under `PID Issuer CA 02` (C=EU) |
+| Credential request/response encryption | both advertised, both `encryption_required: false` |
+| Token endpoint auth methods | advertises `["public"]`, yet accepts DPoP and attestation-based client authentication |
+| Key attestation requirements | advertised as `iso_18045_high`, **not enforced** — a software key with no attestation is accepted |
+| EUDI trust lists (LOTE) | `https://trustedlist.serviceproviders.eudiw.dev/LOTE/json/{PIDProviders,WRPACProviders,PubEAAProviders}.jwt` — JWS (`ES256`, `cty: octet-stream`) wrapping a `LoTE` JSON object, **not** the ETSI TS 119 612 XML of the eIDAS lists |
+| `PIDProviders.jwt` contents | 14 CA certificates, issued **2026-07-09**, `NextUpdate` 2027-01-05; service types `…/19602/SvcType/PID/{Issuance,Revocation}`. Both the PID DS certificate and the signed-metadata signer verify against it |
 
 The `x509_hash` rule is implemented and pinned by a fixed test vector: hashing
 `test/fixtures/real/eudiw-verifier-leaf.pem` reproduces

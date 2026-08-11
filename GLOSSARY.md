@@ -24,6 +24,23 @@ specification of the wallet ecosystem, versioned separately from the
 regulations. Published at
 [eu-digital-identity-wallet/eudi-doc-architecture-and-reference-framework](https://github.com/eu-digital-identity-wallet/eudi-doc-architecture-and-reference-framework).
 
+**TS1–TS14** — the ARF's numbered **Technical Specifications**, published
+separately from the ARF itself in
+[eudi-doc-standards-and-technical-specifications](https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications).
+They are versioned independently of both the ARF and the regulations, so "TS3
+v1.5" is a meaningful citation and "TS3" alone often is not.
+
+**TS3** — *Specification of Wallet Unit Attestations (WUA) used in issuance of
+PID and Attestations*. The one this project keeps meeting, because it governs
+what an issuer may demand of a wallet before issuing. The EU reference issuer's
+changelog records aligning with **TS3 v1.5**, and the deployed issuer advertises
+`key_attestations_required` on every PID proof type — which is what stops a
+wallet with no attestation provider from obtaining a PID at all. See
+`REPRODUCE.md` section 5. Clause numbers cited in the reference issuer's own
+source: **2.2.2.1** (cap proof keys at the issuer's `batch_size`) and **2.4.3**
+(a credential's technical validity must end before the WIA's
+`client_status.exp`).
+
 **CIR** — Commission Implementing Regulation. The binding technical rules under
 eIDAS 2.0. Two matter here:
 
@@ -227,8 +244,20 @@ DPoP-bound tokens when the wallet asks for them.
 wallet signs to prove it holds the key the credential will be bound to.
 
 **Key attestation** — evidence about *where* a key lives (secure element,
-etc.). The reference issuer advertises requiring it; it did not enforce it in
-testing.
+etc.), governed by **TS3**. The reference issuer advertises requiring it
+(`key_attestations_required`, at assurance level `iso_18045_high`); it did not
+enforce it in testing — a bare software key was accepted.
+
+**WUA** — Wallet Unit Attestation. What TS3 specifies: the wallet provider's
+signed statement about the wallet unit and the keys it holds, presented at the
+**credential** endpoint as the key attestation backing a proof of possession.
+
+**WIA** — Wallet Instance Attestation. The provider's statement that this app
+instance is genuine, presented at the **token** endpoint as client
+authentication (`OAuth-Client-Attestation` / `-PoP` headers). Distinct from the
+WUA despite both coming from the wallet provider, and issued from a different
+endpoint. A wallet configured without one has neither, which is the practical
+reason a build can fail to obtain a PID.
 
 ---
 
@@ -308,4 +337,5 @@ failure path ends at exactly one, so callers never parse error strings.
 | **`vct`** — SD-JWT VC type | **`doctype`** — mdoc type |
 | **JAR** — signed *request* | **JARM** — encrypted/signed *response* |
 | **JAR** — signs the request parameters | **PAR** — moves them to a back channel |
+| **WUA** — about the wallet unit and its keys, sent to the *credential* endpoint | **WIA** — about the app instance, sent to the *token* endpoint |
 | **Registrar** — approves and registers you | **Access CA** — issues your certificate |
