@@ -23,6 +23,12 @@ npm run fetch-credential -- sd-jwt        # drive OID4VCI against the EU referen
 
 `config/`, `out/` and `dist/` are gitignored; `test/fixtures/` is committed on purpose.
 
+`anchors/` holds committed **public** certificates that deployments point
+`TRUST_ANCHORS_FILE` at, and is the only non-code directory the Dockerfile copies
+into the runtime image. Nothing under `test/` may be referenced by a deployment
+config or by the image — that is how throwaway private keys ended up shipping
+once already. Private key material belongs in `config/`, which is gitignored.
+
 ## Architecture
 
 `src/` is the library, `app/` is a demo that consumes it. The boundary is load-bearing:

@@ -18,10 +18,11 @@ primary_region = 'fra'
   CLIENT_ID_PREFIX = 'x509_hash'
   PORT = '3000'
   REQUESTED_VCT = 'urn:eudi:pid:1'
-  # The reference issuer's real anchor. The throwaway CA in
-  # test/fixtures/trust-anchor.pem rejects every genuine credential with
-  # ISSUER_UNTRUSTED, and the eIDAS LOTL does not carry this issuer either.
-  TRUST_ANCHORS_FILE = '/app/test/fixtures/real/eudiw-pid-issuer-ca.pem'
+  # The reference issuer's real anchor. The throwaway CA the fixture script
+  # generates rejects every genuine credential with ISSUER_UNTRUSTED, and the
+  # eIDAS LOTL does not carry this issuer either. See anchors/README.md: it
+  # anchors a *testing* issuer.
+  TRUST_ANCHORS_FILE = '/app/anchors/eudiw-pid-issuer-ca.pem'
   TRUST_MODE = 'pinned'
   WALLET_SCHEME = 'eudi-openid4vp://'
   # The reference issuer emits an mdoc validUntil that is not valid RFC 3339.

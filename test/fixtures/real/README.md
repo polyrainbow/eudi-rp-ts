@@ -9,10 +9,15 @@ identity provider.
 | File | What it is |
 |---|---|
 | `eudiw-pid-sd-jwt-vc.txt` | The issued credential, no Key Binding JWT (it was never presented) |
-| `eudiw-pid-issuer-ca.pem` | `CN=PID Issuer CA - UT 02`, fetched from the leaf's AIA extension |
 | `holder-private-jwk.json` | The throwaway P-256 key the credential is bound to (`cnf.jwk`) |
 | `eudiw-pid-mdoc.txt` | The same subject in ISO 18013-5 mdoc form, `IssuerSigned` as base64url CBOR. A **separate issuance, 2026-08-11**, expiring **2026-11-09** |
 | `mdoc-device-private-jwk.json` | The throwaway device key that mdoc is bound to |
+
+The issuing CA — `CN=PID Issuer CA - UT 02`, fetched from the leaf's AIA
+extension — used to sit in this directory too, and is now in **`anchors/`**. It
+is a public certificate that deployments point `TRUST_ANCHORS_FILE` at, and
+reaching it should not mean shipping a directory of private keys into a runtime
+image, which is exactly what the Dockerfile used to do.
 
 The private key is committed deliberately. It was generated solely to request
 this credential and exists nowhere else; publishing it lets the test suite mint

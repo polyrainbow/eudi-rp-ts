@@ -435,7 +435,7 @@ against the simulated wallet.
 To repeat it: run `npm run register-rp`, complete the registration chain it
 stops at, and configure `CLIENT_ID_PREFIX=x509_hash` — the issued certificate
 carries a URI SAN rather than a dNSName, so `x509_san_dns` will not work. Point
-`TRUST_ANCHORS_FILE` at `test/fixtures/real/eudiw-pid-issuer-ca.pem`, set
+`TRUST_ANCHORS_FILE` at `anchors/eudiw-pid-issuer-ca.pem`, set
 `BASE_URL` to your public URL, and `WALLET_SCHEME` to `eudi-openid4vp://`.
 
 ### Access certificates

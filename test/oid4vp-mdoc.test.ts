@@ -14,9 +14,10 @@ import { TrustAnchors } from '../src/trust/anchors.ts';
 import { buildDeviceResponse } from './mdoc-wallet.ts';
 
 const real = fileURLToPath(new URL('./fixtures/real/', import.meta.url));
+const anchorDir = fileURLToPath(new URL('../anchors/', import.meta.url));
 const issuerSigned = readFileSync(`${real}eudiw-pid-mdoc.txt`, 'utf8').trim();
 const devicePrivateJwk = JSON.parse(readFileSync(`${real}mdoc-device-private-jwk.json`, 'utf8'));
-const anchors = TrustAnchors.fromPem(readFileSync(`${real}eudiw-pid-issuer-ca.pem`, 'utf8'));
+const anchors = TrustAnchors.fromPem(readFileSync(`${anchorDir}eudiw-pid-issuer-ca.pem`, 'utf8'));
 
 const CLIENT_ID = 'redirect_uri:https://verifier.test/oid4vp/response/abc';
 const RESPONSE_URI = 'https://verifier.test/oid4vp/response/abc';

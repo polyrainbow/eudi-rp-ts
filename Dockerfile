@@ -10,7 +10,10 @@ RUN npm ci --omit=dev
 
 COPY src ./src
 COPY app ./app
-COPY test/fixtures ./test/fixtures
+# Public certificates only. This used to be `COPY test/fixtures`, which put the
+# throwaway private keys from test/fixtures/real/ into the runtime image because
+# the default trust anchor happened to live next to them.
+COPY anchors ./anchors
 
 ENV PORT=3000
 EXPOSE 3000

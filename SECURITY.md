@@ -32,6 +32,11 @@ Do not copy these patterns into anything real, and do not reuse these keys.
 `config/` is gitignored — that is where a real access certificate and its
 private key land if you generate or install one. Check it stays untracked.
 
+None of it reaches a deployment. The runtime image carries `anchors/`, which is
+public certificates only; it used to carry the whole of `test/fixtures/`,
+private keys included, because the default trust anchor happened to live there.
+`npm run check:package` makes the same assertion about the published tarball.
+
 ## Reporting a vulnerability
 
 Open an issue for anything already public — a wrong check, a missing

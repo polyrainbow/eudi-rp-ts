@@ -14,8 +14,9 @@ import { verifyAgeOver18, verifyCredential } from '../src/verify.ts';
  * shows it agrees with the EUDI ecosystem. See test/fixtures/real/README.md.
  */
 const dir = fileURLToPath(new URL('./fixtures/real/', import.meta.url));
+const anchorDir = fileURLToPath(new URL('../anchors/', import.meta.url));
 const credential = readFileSync(`${dir}eudiw-pid-sd-jwt-vc.txt`, 'utf8').trim();
-const anchors = TrustAnchors.fromPem(readFileSync(`${dir}eudiw-pid-issuer-ca.pem`, 'utf8'));
+const anchors = TrustAnchors.fromPem(readFileSync(`${anchorDir}eudiw-pid-issuer-ca.pem`, 'utf8'));
 
 /** Inside the credential's validity window (issued 2026-08-09, expires 2026-11-08). */
 const NOW = new Date('2026-09-01T00:00:00Z');

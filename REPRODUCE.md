@@ -220,6 +220,13 @@ TRUST_ANCHORS_FILE=/app/test/fixtures/trust-anchor.pem     # the demo CA
 ACCESS_CERT_CHAIN_PEM / ACCESS_CERT_KEY_PEM                # fly secrets
 ```
 
+That anchor path is what the run used and is left as recorded. It no longer
+exists in the image: the runtime no longer carries `test/fixtures/`, and the
+anchor moved to `/app/anchors/eudiw-pid-issuer-ca.pem`. Repeating this today
+means pointing at that instead — which anchors the reference issuer rather than
+the fixture CA, so the wallet must present a credential from the reference
+issuer, as the 2026-08-10 run below did.
+
 with `fly scale count 1`. **One machine is required**: sessions live in memory,
 so with two the browser's poll lands on the machine that never saw the create
 about half the time and reports `SESSION_EXPIRED` for a session that exists.
@@ -374,7 +381,7 @@ CLIENT_ID_PREFIX=x509_hash
 WALLET_SCHEME=eudi-openid4vp://
 REQUESTED_VCT=urn:eudi:pid:1
 TRUST_MODE=pinned
-TRUST_ANCHORS_FILE=/app/test/fixtures/real/eudiw-pid-issuer-ca.pem
+TRUST_ANCHORS_FILE=/app/anchors/eudiw-pid-issuer-ca.pem
 MDOC_TOLERATE_MALFORMED_VALIDITY=true
 ACCESS_CERT_CHAIN_PEM / ACCESS_CERT_KEY_PEM        # fly secrets, the RPAC below
 ```

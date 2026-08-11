@@ -13,8 +13,9 @@ import { evaluateAgeOver18Mdoc } from '../src/predicate/age.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 
 const dir = fileURLToPath(new URL('./fixtures/real/', import.meta.url));
+const anchorDir = fileURLToPath(new URL('../anchors/', import.meta.url));
 const issuerSigned = readFileSync(`${dir}eudiw-pid-mdoc.txt`, 'utf8').trim();
-const anchors = TrustAnchors.fromPem(readFileSync(`${dir}eudiw-pid-issuer-ca.pem`, 'utf8'));
+const anchors = TrustAnchors.fromPem(readFileSync(`${anchorDir}eudiw-pid-issuer-ca.pem`, 'utf8'));
 const ourAnchors = TrustAnchors.fromPem(
   readFileSync(fileURLToPath(new URL('./fixtures/trust-anchor.pem', import.meta.url)), 'utf8'),
 );

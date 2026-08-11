@@ -19,11 +19,12 @@ services:
       WALLET_SCHEME: ${WALLET_SCHEME:-eudi-openid4vp://}
       REQUESTED_VCT: ${REQUESTED_VCT:-urn:eudi:pid:1}
 
-      # DEMO ANCHOR: the throwaway CA from test/fixtures, so `docker compose up`
-      # works out of the box against the test wallet in test/wallet.ts.
-      # Replace it before this means anything.
+      # DEMO ANCHOR: the EU *reference* issuer's CA, so `docker compose up`
+      # works out of the box against a credential from the reference wallet.
+      # It anchors a testing issuer carrying synthetic subject data — see
+      # anchors/README.md. Replace it before this means anything.
       TRUST_MODE: ${TRUST_MODE:-pinned}
-      TRUST_ANCHORS_FILE: ${TRUST_ANCHORS_FILE:-/app/test/fixtures/trust-anchor.pem}
+      TRUST_ANCHORS_FILE: ${TRUST_ANCHORS_FILE:-/app/anchors/eudiw-pid-issuer-ca.pem}
 
       # With TRUST_MODE=lotl these take over. Defaults to the eIDAS EU LOTL;
       # point LOTL_URL at your ecosystem's list of PID Providers instead.
