@@ -19,7 +19,7 @@ const ourAnchors = TrustAnchors.fromPem(
   readFileSync(fileURLToPath(new URL('./fixtures/trust-anchor.pem', import.meta.url)), 'utf8'),
 );
 
-/** Inside the credential's window (issued 2026-08-10, expires 2026-11-08). */
+/** Inside the credential's window (issued 2026-08-11, expires 2026-11-09). */
 const NOW = new Date('2026-09-01T00:00:00Z');
 const base = {
   issuerSigned,
@@ -83,17 +83,20 @@ describe('mdoc from the EU reference issuer', () => {
     assert.match(strict.detail, /validUntil/);
   });
 
-  it('carries no age attribute, so the predicate cannot be satisfied', async () => {
+  it('carries no age attribute, so the predicate resolves through birth_date', async () => {
     const result = await verifyMdoc(base);
     assert.equal(result.verified, true);
 
     const elements = result.value.claims['eu.europa.ec.eudi.pid.1']!;
+    // PID Rulebook v1.1 removed the age attributes (CIR 2024/2977), and the
+    // issuer's mdoc form offers no age field — so birth_date is the only route,
+    // exactly as `birthdate` is for the SD-JWT VC.
     assert.ok(!('age_over_18' in elements));
-    assert.ok(!('birth_date' in elements));
+    assert.ok('birth_date' in elements);
 
     const age = evaluateAgeOver18Mdoc(elements, NOW);
-    assert.equal(age.verified, false);
-    assert.equal(age.reason, 'PREDICATE_CLAIM_MISSING');
+    assert.equal(age.verified, true);
+    assert.equal(age.value.evidence, 'birthdate');
   });
 });
 

@@ -81,7 +81,7 @@ Exact parameters, so a different result is attributable:
 |---|---|
 | Credential configurations | `eu.europa.ec.eudi.pid_vc_sd_jwt`, `eu.europa.ec.eudi.pid_mdoc` |
 | Identity provider | **FormEU**, selected by country code `FC`. Other codes route to real eID nodes. |
-| Subject data | `given_name=Test`, `family_name=Tester`, `birthdate=1990-06-12`, `nationalities[0][country_code]=PT`, `place_of_birth[0][country]=PT`, `place_of_birth[0][locality]=Porto`, `picture=Port1` |
+| Subject data | `given_name=Test`, `family_name=Tester`, `place_of_birth[0][country]=PT`, `place_of_birth[0][locality]=Porto`, plus **per-format** names: `birthdate` / `nationalities[0][country_code]` / `picture` for SD-JWT VC, `birth_date` / `nationality[0][country_code]` / `portrait` for mdoc. All `1990-06-12`, `PT`, `Port1`. See "Two forms, two sets of field names". |
 | `client_id` | `ID` — arbitrary. The issuer accepts any client id and any redirect uri. |
 | `redirect_uri` | `eudi-openid4ci://authorize` |
 | PKCE | S256 |
@@ -145,10 +145,12 @@ rather than this library's:
   `issuing_authority`, `issuing_country`. PID Rulebook v1.1 removed the age
   attributes following CIR 2024/2977. Proving age therefore costs the holder
   their full date of birth.
-- The **mdoc PID carries no age attribute *and no `birth_date`***, so the
-  predicate cannot be satisfied from it at all — despite the same form
-  submission producing a `birthdate` in the SD-JWT VC.
-- The mdoc's **`validUntil` is not valid RFC 3339**: `2026-11-08T14:09:35+00:00Z`
+- The **mdoc PID carries no age attribute** either — no `age_over_18`. Neither
+  form offers an age field, so `birth_date` is the only route to the predicate
+  in either format.
+- The mdoc **does** carry `birth_date`, contrary to what this file said until
+  2026-08-11. See "Two forms, two sets of field names" below.
+- The mdoc's **`validUntil` is not valid RFC 3339**: `2026-11-09T11:51:46+00:00Z`
   carries both an offset and a `Z`. `verifyMdoc` rejects it unless
   `tolerateMalformedValidityDates` is set. This matches upstream issue #177.
 
@@ -249,6 +251,54 @@ That returns a `key-attestation+jwt` (claims: `iat`, `exp`, `attested_keys`,
 `/wallet-instance-attestation/jwk` behaves the same way. Both paths exist on
 `wallet-provider.eudiw.dev` and `dev.wallet-provider.eudiw.dev`.
 
+### Two forms, two sets of field names
+
+A correction, recorded at length because this file asserted the opposite for
+months and the mistake was ours.
+
+The EU's Relying Party Registration service authenticates you with a PID
+presentation. Its DCQL query — fetched live from `verifier-backend.eudiw.dev` —
+asks for **`format: "mso_mdoc"`**, doctype `eu.europa.ec.eudi.pid.1`, and five
+claims, none marked `optional` and with no `claim_sets`, so all five are
+mandatory:
+
+```
+family_name, given_name, birth_date, issuing_authority, issuing_country
+```
+
+An SD-JWT VC PID cannot satisfy that, and `GET /authentication` takes no
+parameters, so there is no format to negotiate — you need an mdoc PID. A wallet
+holding one satisfied the request on 2026-08-11 and the service returned a
+`hash_pid`, even though the mdoc this repo fetched had no `birth_date`.
+
+The reason is that **the two credential configurations serve different forms,
+with different names for the same field**:
+
+| Data | `pid_vc_sd_jwt` form | `pid_mdoc` form |
+|---|---|---|
+| Date of birth | `birthdate` | **`birth_date`** |
+| Nationality | `nationalities[0][country_code]` | **`nationality[0][country_code]`** |
+| Photo | `picture` | **`portrait`** |
+
+`scripts/fetch-reference-credential.ts` posted the SD-JWT VC names for both.
+The issuer accepts unknown fields and drops them **without an error**, so the
+mdoc came back missing exactly the attributes whose names differ. That absence
+was then written up here, in the README and in `test/fixtures/real/README.md` as
+a property of the reference issuer. It never was one.
+
+Fixed 2026-08-11: `SUBJECT` is now per-configuration, and the same flow yields
+`birth_date` (`1990-06-12T00:00:00.000Z`) and a real 10 kB `portrait`. To see
+the field names for yourself, dump the form rather than trusting this table —
+it is one POST:
+
+```
+POST /dynamic/country_selected  (country=FC)   -> hidden `payload`
+POST /display_form              (payload=…)    -> the form HTML
+```
+
+The lesson generalises: a silently-dropped form field looks exactly like an
+upstream omission, and only reading the form tells them apart.
+
 ### Why this breaks wallets
 
 A wallet-core build configured with `ClientAuthenticationType.None` has no
@@ -320,7 +370,8 @@ curl -s https://registry.serviceproviders.eudiw.dev/authentication   # QR_code_u
 
 ## Time-sensitive material
 
-- The credentials in `test/fixtures/real/` **expire 2026-11-08**. Offline tests
+- The credentials in `test/fixtures/real/` **expire 2026-11-08** (SD-JWT VC)
+  and **2026-11-09** (mdoc). Offline tests
   pin a fixed `now` and keep passing; the OID4VP round-trip test skips itself
   after that date with a message saying so. Re-run `npm run fetch-credential` for
   fresh ones.

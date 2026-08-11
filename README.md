@@ -237,9 +237,13 @@ signed by a different key, is rejected.
 
 Two things the real reference credential taught us, both pinned by tests:
 
-- **Its mdoc PID carries no age information at all** — no `birth_date`, no
-  `age_over_18` — so the predicate cannot be satisfied from it, even though the
-  same form submission produced a `birthdate` in the SD-JWT VC.
+- **Its mdoc PID carries no age predicate** — no `age_over_18`, matching the
+  SD-JWT VC's missing `age_equal_or_over`. It *does* carry `birth_date`; the
+  committed fixture lacks one only because the script that fetched it posted the
+  SD-JWT VC form's field names, and the mdoc form calls that field `birth_date`
+  rather than `birthdate`. Unknown fields are dropped without an error. Fixed in
+  `scripts/fetch-reference-credential.ts`; see REPRODUCE.md, "Two forms, two
+  sets of field names".
 - **Its `validUntil` is not valid RFC 3339** (`...+00:00Z`, carrying both an
   offset and a `Z`; upstream issue #177). Rejected by default, with an explicit
   opt-out, because a validity window that cannot be read is not one.

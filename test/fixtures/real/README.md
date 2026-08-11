@@ -11,7 +11,7 @@ identity provider.
 | `eudiw-pid-sd-jwt-vc.txt` | The issued credential, no Key Binding JWT (it was never presented) |
 | `eudiw-pid-issuer-ca.pem` | `CN=PID Issuer CA - UT 02`, fetched from the leaf's AIA extension |
 | `holder-private-jwk.json` | The throwaway P-256 key the credential is bound to (`cnf.jwk`) |
-| `eudiw-pid-mdoc.txt` | The same PID in ISO 18013-5 mdoc form, `IssuerSigned` as base64url CBOR |
+| `eudiw-pid-mdoc.txt` | The same subject in ISO 18013-5 mdoc form, `IssuerSigned` as base64url CBOR. A **separate issuance, 2026-08-11**, expiring **2026-11-09** |
 | `mdoc-device-private-jwk.json` | The throwaway device key that mdoc is bound to |
 
 The private key is committed deliberately. It was generated solely to request
@@ -30,9 +30,10 @@ The subject data is synthetic — "Test Tester", born 1990-06-12, PT — entered
 into the issuer's own test form. The issuer is a testing issuer and says so on
 its front page. Nothing here identifies a real person.
 
-**It expires 2026-11-08**, so `test/real-credential.test.ts` pins a fixed
-`now`. After that date the credential is still useful for structural assertions
-but will fail validity checks against the real clock.
+**The SD-JWT VC expires 2026-11-08 and the mdoc 2026-11-09** — they are separate
+issuances — so `test/real-credential.test.ts` and `test/mdoc.test.ts` each pin a
+fixed `now`. After those dates the credentials are still useful for structural
+assertions but will fail validity checks against the real clock.
 
 ## Why it is worth having
 
@@ -51,12 +52,24 @@ It also settles what the reference issuer actually emits:
   fallback.
 - **A `status` claim is present**, pointing at a token status list. Real
   credentials carry revocation information that we currently skip.
-- **The mdoc PID carries even less.** Its elements are `given_name`,
-  `family_name`, `nationality`, `place_of_birth`, `issuing_authority`,
-  `issuing_country`, `issuance_date`, `expiry_date` — **no `birth_date` and no
-  `age_over_18`**, so the age predicate cannot be satisfied from it at all,
-  despite the same form submission producing a `birthdate` in the SD-JWT VC.
-- **Its `validUntil` is malformed**: `2026-11-08T14:09:35+00:00Z` carries both
+- **The mdoc carries `birth_date`** — `given_name`, `family_name`,
+  `nationality`, `place_of_birth`, `portrait`, `birth_date`,
+  `issuing_authority`, `issuing_country`, `issuance_date`, `expiry_date`.
+
+  This file used to say the opposite, and that was our bug rather than the
+  issuer's. The mdoc form names the field **`birth_date`** while the SD-JWT VC
+  form names it **`birthdate`** (likewise `nationality[…]` vs
+  `nationalities[…]`, `portrait` vs `picture`), and
+  `scripts/fetch-reference-credential.ts` posted the SD-JWT VC names into both.
+  Unknown fields are accepted and dropped without an error, so the credential
+  came back missing exactly those attributes and the absence was written up as
+  an issuer behaviour. Fixed and the fixture regenerated on 2026-08-11; see
+  REPRODUCE.md, "Two forms, two sets of field names".
+- **It carries no `age_over_18`**, and that part stands: neither form offers an
+  age field, so `birth_date` is the only route to the predicate — mirroring
+  `birthdate` in the SD-JWT VC. `test/mdoc.test.ts` and
+  `test/oid4vp-mdoc.test.ts` now prove that end to end against this credential.
+- **Its `validUntil` is malformed**: `2026-11-09T11:51:46+00:00Z` carries both
   an offset and a `Z`, which is not valid RFC 3339. Reported upstream as issue
   #177. `verifyMdoc` rejects it by default and has an explicit opt-out.
 - **`x5c` carries only the leaf.** The CA has to come from somewhere else — the

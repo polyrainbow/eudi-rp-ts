@@ -34,18 +34,41 @@ const REDIRECT_URI = 'eudi-openid4ci://authorize';
  */
 const COUNTRY = 'FC';
 
-/** Fixed so a re-run produces a comparable credential. Over 18 deliberately. */
-const SUBJECT = {
-  birthdate: '1990-06-12',
+const SUBJECT_COMMON = {
   family_name: 'Tester',
   given_name: 'Test',
-  'nationalities[0][country_code]': 'PT',
   'place_of_birth[0][country]': 'PT',
   'place_of_birth[0][locality]': 'Porto',
-  picture: 'Port1',
   // Contributed by the form's submit button. Without it the issuer returns 500
   // rather than 400 — reported upstream, see REPRODUCE.md.
   proceed: 'Submit',
+};
+
+/**
+ * Fixed so a re-run produces a comparable credential. Over 18 deliberately.
+ *
+ * **The two configurations serve different forms.** The same data has
+ * different field names in each — `birthdate` vs `birth_date`,
+ * `nationalities[0][…]` vs `nationality[0][…]`, `picture` vs `portrait`.
+ * Unknown fields are accepted and silently dropped, so posting the SD-JWT VC
+ * names into the mdoc form yields a credential with no date of birth and no
+ * error. That is exactly what this script used to do, and the missing
+ * `birth_date` got recorded as an issuer behaviour for months before anyone
+ * checked the form. Confirm against `POST /display_form` before changing these.
+ */
+const SUBJECT: Record<'sd-jwt' | 'mdoc', Record<string, string>> = {
+  'sd-jwt': {
+    ...SUBJECT_COMMON,
+    birthdate: '1990-06-12',
+    'nationalities[0][country_code]': 'PT',
+    picture: 'Port1',
+  },
+  mdoc: {
+    ...SUBJECT_COMMON,
+    birth_date: '1990-06-12',
+    'nationality[0][country_code]': 'PT',
+    portrait: 'Port1',
+  },
 };
 
 const CONFIGURATIONS = {
@@ -130,7 +153,7 @@ await follow(await step(`${ISSUER}/display_form`, { method: 'POST', body: formPa
 
 console.log(`Submitting the ${COUNTRY} (FormEU) test identity`);
 const submitted = await follow(
-  await step(`${BACKEND}/dynamic/form`, { method: 'POST', body: new URLSearchParams(SUBJECT) }),
+  await step(`${BACKEND}/dynamic/form`, { method: 'POST', body: new URLSearchParams(SUBJECT[format]) }),
 );
 if (!submitted.ok) {
   throw new Error(`Form submission failed: HTTP ${submitted.status} ${await submitted.text()}`);

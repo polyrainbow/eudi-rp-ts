@@ -115,17 +115,18 @@ describe('mdoc through the OID4VP response handler', () => {
     assert.equal(result.reason, 'KEY_BINDING_INVALID');
   });
 
-  it('reaches the predicate, which this credential cannot satisfy', async () => {
-    // The reference mdoc PID carries no age_over_18 and no birth_date. Getting
-    // this far proves the envelope, issuer signature, digests and device
-    // signature all verified — the credential simply has nothing to answer with.
+  it('satisfies the predicate from a genuine reference credential', async () => {
+    // The whole chain against a real credential: envelope, issuer signature,
+    // element digests, device signature over the SessionTranscript, and the
+    // age predicate resolved from birth_date — the mdoc PID carries no
+    // age_over_18, so this is the only route.
     const result = await verifyPresentationResponse(context as never, {
       vp_token: { [MDOC_CREDENTIAL_QUERY_ID]: [present()] },
       state: 'st',
     });
 
-    assert.equal(result.verified, false);
-    assert.equal(result.reason, 'PREDICATE_CLAIM_MISSING');
+    assert.equal(result.verified, true, JSON.stringify(result));
+    assert.equal(result.value.evidence, 'birthdate');
   });
 
   it('refuses a response answering both credential queries', async () => {
