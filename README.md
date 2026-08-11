@@ -398,19 +398,29 @@ and an explicit list of what was *not* done.
   `PID Issuer CA - UT 02`, issuer signature, disclosure resolution, predicate —
   against a `urn:eudi:pid:1` issued by `backend.issuer.eudiw.dev`.
 - **The EU trust lists parse and verify.** `RUN_NETWORK_TESTS=1 npm test`.
+- **The EUDI reference wallet presents to this verifier.** 2026-08-11, over a
+  public deployment with a registered access certificate. Verified 18-or-over
+  from a `urn:eudi:pid:1` issued by `CN=PID DS - 002`. Unlike the credential
+  above — fetched by driving OID4VCI directly — this one came through a wallet,
+  so it carries a Key Binding JWT. See [REPRODUCE.md](REPRODUCE.md) section 6
+  for the configuration and the two defects it exposed.
 
 **Fetch your own credential and check it**: `npm run fetch-credential -- sd-jwt`
 drives the OID4VCI flow against `issuer.eudiw.dev` and writes a real credential
 you can verify with this library.
 
-Still **not** proven: a presentation from the reference *wallet*. That needs a
-public deployment plus an access certificate the wallet trusts, and the
-credential above was obtained by driving OID4VCI directly rather than through a
-wallet, so it carries no Key Binding JWT.
+Two caveats on the wallet result. The evidence was `birthdate`, not
+`age_equal_or_over.18`: PID Rulebook v1.1 removed the age attributes, so the
+wallet disclosed a full date of birth rather than the boolean — the
+privacy-preserving path is not available against a current reference PID. And
+the wallet answered in `dc+sd-jwt`; the `mso_mdoc` path is still proven only
+against the simulated wallet.
 
-To attempt it: set `CLIENT_ID_PREFIX=x509_san_dns`, supply an access
-certificate, set `BASE_URL` to your tunnel, and point `WALLET_SCHEME` at the
-wallet's scheme.
+To repeat it: run `npm run register-rp`, complete the registration chain it
+stops at, and configure `CLIENT_ID_PREFIX=x509_hash` — the issued certificate
+carries a URI SAN rather than a dNSName, so `x509_san_dns` will not work. Point
+`TRUST_ANCHORS_FILE` at `test/fixtures/real/eudiw-pid-issuer-ca.pem`, set
+`BASE_URL` to your public URL, and `WALLET_SCHEME` to `eudi-openid4vp://`.
 
 ### Access certificates
 

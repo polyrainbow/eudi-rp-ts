@@ -82,8 +82,17 @@ export async function buildAuthorizationRequest(config: VerifierIdentity): Promi
     dcql_query: ageOver18Query(config.requestedVct),
     client_metadata: {
       client_name: 'eudi-rp-ts age check',
+      // Every format the DCQL query asks for MUST appear here. A wallet checks
+      // the two against each other and refuses the whole request otherwise —
+      // the EU reference wallet answers `invalid_request` with
+      // "Verifier does not support all Formats requested in the DCQL query".
+      // Declaring only `dc+sd-jwt` while the query also offers `mso_mdoc` was
+      // exactly that bug, so a test now pins the two together.
       vp_formats_supported: {
         'dc+sd-jwt': { 'sd-jwt_alg_values': ['ES256'], 'kb-jwt_alg_values': ['ES256'] },
+        // COSE algorithm identifiers here, not JOSE names: -7 is ES256
+        // (RFC 9053 §2.1).
+        mso_mdoc: { issuerauth_alg_values: [-7], deviceauth_alg_values: [-7] },
       },
       // Encryption is described by the JWK alone. `authorization_encrypted_
       // response_alg`/`_enc` are pre-1.0 JARM names and appear nowhere in

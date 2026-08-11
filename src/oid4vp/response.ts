@@ -2,7 +2,7 @@ import { Openid4vpVerifier } from '@openid4vc/openid4vp';
 import type { JWK } from 'jose';
 import type { TtlCache } from '../fetching.ts';
 import type { VerifierIdentity } from './identity.ts';
-import { type Outcome, accept, reject } from '../result.ts';
+import { type Outcome, type Rejected, accept, reject } from '../result.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
 import { type AgeResult, type VerifiedCredential, verifyAgeOver18 } from '../verify.ts';
 import { createDecryptJwe, createVerifyJwt, generateRandom, hashCallback } from './callbacks.ts';
@@ -60,6 +60,9 @@ export async function verifyPresentationResponse(
     } as never,
   });
 
+  const declined = await walletErrorResponse(context, authorizationResponse);
+  if (declined) return declined;
+
   let vpToken: unknown;
   try {
     const parsed = await verifier.parseOpenid4vpAuthorizationResponse({
@@ -104,6 +107,48 @@ export async function verifyPresentationResponse(
   return reject(
     'RESPONSE_INVALID',
     `vp_token has no entry for "${CREDENTIAL_QUERY_ID}" or "${MDOC_CREDENTIAL_QUERY_ID}"`,
+  );
+}
+
+/**
+ * A wallet that declines answers with an OAuth 2.0 error response, not a
+ * presentation (OID4VP 1.0 §8.2).
+ *
+ * Under `direct_post.jwt` that error is encrypted exactly like a successful
+ * response, so it is invisible until after decryption. Left to the protocol
+ * parser, which is looking for a `vp_token`, a perfectly well-formed refusal is
+ * reported as a malformed response — hiding the reason the wallet gave. The
+ * reference wallet does exactly this.
+ *
+ * Returns `undefined` when the response is not an error, including when it
+ * cannot be decrypted: that is the parser's business to report, not ours.
+ */
+async function walletErrorResponse(
+  context: PresentationContext,
+  authorizationResponse: Record<string, unknown>,
+): Promise<Rejected | undefined> {
+  let payload: Record<string, unknown>;
+
+  const encrypted = authorizationResponse['response'];
+  if (typeof encrypted === 'string') {
+    const result = await createDecryptJwe(context.decryptionJwk)(encrypted);
+    if (!result.decrypted) return undefined;
+    try {
+      payload = JSON.parse(result.payload) as Record<string, unknown>;
+    } catch {
+      return undefined;
+    }
+  } else {
+    payload = authorizationResponse;
+  }
+
+  const code = payload['error'];
+  if (typeof code !== 'string') return undefined;
+
+  const description = payload['error_description'];
+  return reject(
+    'WALLET_ERROR',
+    typeof description === 'string' ? `${code}: ${description}` : code,
   );
 }
 

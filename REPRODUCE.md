@@ -12,17 +12,16 @@ was **not** done.
 | Verifies the live EU trust lists (LOTL and national lists) | **Reproducible**, `RUN_NETWORK_TESTS=1 npm test` |
 | Full OID4VP round trip over a public deployment | **Reproducible**, against a simulated wallet |
 | mdoc issuer signature, digests and device authentication | **Reproducible** |
-| **Interoperates with the EUDI reference wallet app** | **Not done.** No wallet has ever talked to this verifier |
+| **Interoperates with the EUDI reference wallet app** | **Reproducible**, 2026-08-11, see section 6 |
 
-The wallet in every round trip is `test/wallet.ts` or `test/mdoc-wallet.ts` —
-about eighty lines each, written for these tests. They exercise the protocol
+Every round trip in sections 1–4 uses `test/wallet.ts` or `test/mdoc-wallet.ts`
+— about eighty lines each, written for these tests. They exercise the protocol
 correctly, and they are not evidence of interoperability with anyone else's
-implementation. Getting a real wallet to present requires a Relying Party Access
-Certificate; see "Access certificates" in the README.
+implementation. Section 6 is the one that is: a presentation from the EU
+reference wallet, against a registered Relying Party Access Certificate.
 
-That certificate in turn requires a PID already held in a wallet, so the first
-step is issuance, not presentation. Attempted 2026-08-11 and blocked — by the
-wallet build, not by the issuer. See section 5.
+Two defects that only a real wallet exposed are recorded there. Both were
+invisible to the simulated wallets, which is the point of the distinction.
 
 ## Environment of record
 
@@ -334,6 +333,107 @@ through a wallet, using the upstream app's configuration:
 The authorization server accepts DPoP and attestation-based client
 authentication even though it advertises only
 `token_endpoint_auth_methods_supported: ["public"]`.
+
+## 6. A presentation from the EU reference wallet
+
+Done **2026-08-11**. This is the claim the README carried as unproven for
+months: not a simulated wallet, but the EUDI reference wallet app presenting a
+PID to this verifier over a public deployment.
+
+The result, as the page rendered it:
+
+```
+Verified — 18 or over
+Format           dc+sd-jwt
+Evidence         birthdate
+Credential type  urn:eudi:pid:1
+Issuer           CN=PID DS - 002, organizationIdentifier=LEIEU-123456789,
+                 O=EUDI Wallet Reference Implementation, C=UT
+```
+
+The deployment configuration that produced it:
+
+```
+BASE_URL=https://eudi-rp-ts.fly.dev
+CLIENT_ID_PREFIX=x509_hash
+WALLET_SCHEME=eudi-openid4vp://
+REQUESTED_VCT=urn:eudi:pid:1
+TRUST_MODE=pinned
+TRUST_ANCHORS_FILE=/app/test/fixtures/real/eudiw-pid-issuer-ca.pem
+MDOC_TOLERATE_MALFORMED_VALIDITY=true
+ACCESS_CERT_CHAIN_PEM / ACCESS_CERT_KEY_PEM        # fly secrets, the RPAC below
+```
+
+with `fly scale count 1`, for the in-memory session reason in section 4.
+
+### The access certificate
+
+Obtained from the EU *Testing* Relying Party Registration service, by completing
+the chain `npm run register-rp` stops at. The registered entity is fictional —
+the PID that authenticates the registration is itself synthetic (`C=UT`,
+Utopia), so there is no real identity to submit.
+
+The issued leaf:
+
+```
+subject = CN=eudi-rp-ts, C=DE, O=eudi-rp-ts Test Verifier,
+          organizationIdentifier=VATDE999999999
+issuer  = CN=PID Issuer CA 02, O=EUDI Wallet Reference Implementation, C=EU
+SAN     = URI:https://github.com/polyrainbow/eudi-rp-ts/issues
+valid   = 2026-08-11 → 2028-08-10, EC P-256, KeyUsage digitalSignature
+```
+
+**The SAN is a URI, taken from the `supportURI` submitted at registration.** It
+carries no dNSName, and OID4VP 1.0 Final has no `x509_san_uri` — so
+`CLIENT_ID_PREFIX=x509_san_dns` is unusable and the identifier must be
+`x509_hash`, here
+`x509_hash:Kbo2tsX4JWQ0aLZ_S0zOXeKRSWH_qqXnvXaMsQZ0pvI`. The reference verifier
+is in the same position; see "Observed facts" below. The PKCS#12 contained the
+leaf only, no CA — which turned out not to matter, since the wallet accepted a
+single-certificate `x5c`.
+
+### Two defects only a real wallet exposed
+
+**1. `vp_formats_supported` did not cover the DCQL query.** The query offers
+`dc+sd-jwt` and `mso_mdoc` as alternatives, but `client_metadata` declared only
+`dc+sd-jwt`. The wallet refused the entire request before considering any
+credential:
+
+```
+invalid_request: InvalidClientMetaData(
+  cause=Verifier does not support all Formats requested in the DCQL query)
+```
+
+A Verifier may only ask for formats it declares. Both simulated wallets skip
+that check, so the whole suite passed. `signed-request.test.ts` now asserts
+that every format in the DCQL query appears in `vp_formats_supported`.
+
+**2. A wallet's refusal was reported as a malformed response.** Under
+`direct_post.jwt` an OAuth error response is encrypted exactly like a success,
+so it decrypts to `{error, error_description, state}` with no `vp_token`. The
+protocol parser, looking for a `vp_token`, reported a DCQL schema violation —
+and the wallet's stated reason never reached the user. Diagnosing defect 1 was
+impossible until this was fixed. Encrypted error responses now surface as
+`WALLET_ERROR` carrying the wallet's own code and description.
+
+Both fixes are in `src/`, not the demo app: they are protocol handling, not
+presentation.
+
+### What the result shows, and what it does not
+
+`Evidence: birthdate` means the **privacy-preserving path was not available**.
+The wallet could not satisfy `age_equal_or_over.18` and fell back to disclosing
+a full date of birth — more information than the question required. This is the
+consequence of PID Rulebook v1.1 removing the age attributes per CIR 2024/2977,
+observed rather than predicted. A verifier asking "is this person 18" against a
+current reference PID learns exactly when they were born.
+
+`Format: dc+sd-jwt` — the wallet chose SD-JWT VC although it also held the mdoc
+PID that the registration service requires. Both were offered; the mdoc path
+therefore remains proven only against `test/mdoc-wallet.ts`.
+
+Unlike the credential in section 2, this presentation came through a wallet, so
+it carries a Key Binding JWT and the holder-binding path was exercised for real.
 
 ## Observed facts about the reference infrastructure
 

@@ -65,12 +65,18 @@ export async function presentAgeOver18(options: {
  * URL it was posted to.
  */
 export async function encryptResponse(options: {
-  vpToken: unknown;
+  vpToken?: unknown;
   state: string;
   /** The verifier's public encryption JWK from client_metadata. */
   encryptionJwk: JWK;
   /** From `encrypted_response_enc_values_supported`; defaults to A128GCM. */
   enc?: string;
+  /**
+   * Send an OAuth 2.0 error instead of a presentation (OID4VP 1.0 §8.2). A
+   * refusal is encrypted exactly like a success, which is what makes it easy
+   * to mistake for a malformed response.
+   */
+  error?: { code: string; description?: string };
 }): Promise<string> {
   // OID4VP 1.0 §8.3, as a real wallet does it: the JWE `alg` MUST equal the
   // chosen JWK's `alg`, the `enc` defaults to A128GCM, and the JWK's `kid` is
@@ -80,9 +86,15 @@ export async function encryptResponse(options: {
   const enc = options.enc ?? 'A128GCM';
   const key = await importJWK(options.encryptionJwk, alg);
 
-  return await new CompactEncrypt(
-    new TextEncoder().encode(JSON.stringify({ vp_token: options.vpToken, state: options.state })),
-  )
+  const payload = options.error
+    ? {
+        error: options.error.code,
+        ...(options.error.description ? { error_description: options.error.description } : {}),
+        state: options.state,
+      }
+    : { vp_token: options.vpToken, state: options.state };
+
+  return await new CompactEncrypt(new TextEncoder().encode(JSON.stringify(payload)))
     .setProtectedHeader({ alg, enc, ...(options.encryptionJwk.kid ? { kid: options.encryptionJwk.kid } : {}) })
     .encrypt(key);
 }

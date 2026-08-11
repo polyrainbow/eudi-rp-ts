@@ -174,4 +174,66 @@ describe('signed request (x509_san_dns)', () => {
     assert.equal(outcome.status, 'verified', JSON.stringify(outcome));
     assert.equal(outcome.result['evidence'], 'age_equal_or_over.18');
   });
+
+  /**
+   * The rule the EU reference wallet enforced, and that our simulated wallet
+   * never did: a Verifier may only ask for formats it declares support for.
+   * Asking for `mso_mdoc` in the DCQL query while `vp_formats_supported` listed
+   * only `dc+sd-jwt` got the entire request refused with
+   * `InvalidClientMetaData`, before any credential was ever considered.
+   */
+  it('declares vp_formats_supported for every format the DCQL query asks for', async () => {
+    const { params } = await startSession();
+    const requestUri = params.get('request_uri')!.replace(`https://${DNS_NAME}`, localUrl);
+    const jwt = await (await fetch(requestUri)).text();
+    const request = JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString());
+
+    const requested = new Set<string>(
+      request.dcql_query.credentials.map((c: { format: string }) => c.format),
+    );
+    const declared = new Set(Object.keys(request.client_metadata.vp_formats_supported));
+
+    assert.ok(requested.size > 0, 'the query should ask for at least one format');
+    for (const format of requested) {
+      assert.ok(
+        declared.has(format),
+        `DCQL asks for ${format}, which client_metadata.vp_formats_supported does not declare`,
+      );
+    }
+  });
+
+  /**
+   * The EU reference wallet declines this way, and the failure was worth a
+   * test: an encrypted refusal decrypts to `{error, error_description, state}`
+   * with no `vp_token`, so the DCQL schema check reported a malformed
+   * `vp_token` and the wallet's actual reason never reached the user.
+   */
+  it("reports a wallet's encrypted refusal as WALLET_ERROR, not a bad vp_token", async () => {
+    const { id, params } = await startSession();
+    const requestUri = params.get('request_uri')!.replace(`https://${DNS_NAME}`, localUrl);
+    const jwt = await (await fetch(requestUri)).text();
+    const request = JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString());
+
+    const response = await encryptResponse({
+      state: request.state,
+      encryptionJwk: request.client_metadata.jwks.keys[0],
+      error: { code: 'access_denied', description: 'User rejected the request' },
+    });
+
+    const posted = await fetch(request.response_uri.replace(`https://${DNS_NAME}`, localUrl), {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ response }),
+    });
+    assert.equal(posted.status, 200);
+
+    const outcome = (await (await fetch(`${localUrl}/presentations/${id}`)).json()) as {
+      status: string;
+      result: Record<string, unknown>;
+    };
+    assert.equal(outcome.result['verified'], false);
+    assert.equal(outcome.result['reason'], 'WALLET_ERROR');
+    assert.match(String(outcome.result['detail']), /access_denied/);
+    assert.match(String(outcome.result['detail']), /User rejected the request/);
+  });
 });

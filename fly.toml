@@ -11,13 +11,21 @@ primary_region = 'fra'
   # Signed request objects (JAR) with the access certificate chain in x5c.
   # The cert itself arrives via `fly secrets set ACCESS_CERT_{CHAIN,KEY}_PEM`,
   # since there is no filesystem here to point ACCESS_CERT_*_FILE at.
-  CLIENT_ID_PREFIX = 'x509_san_dns'
-  CLIENT_DNS_NAME = 'eudi-rp-ts.fly.dev'
+  # The registered RPAC carries a URI SAN, not a dNSName, and OID4VP 1.0 Final
+  # has no x509_san_uri — so the identifier is the hash of the leaf and
+  # CLIENT_DNS_NAME does not apply.
+  BASE_URL = 'https://eudi-rp-ts.fly.dev'
+  CLIENT_ID_PREFIX = 'x509_hash'
   PORT = '3000'
   REQUESTED_VCT = 'urn:eudi:pid:1'
-  TRUST_ANCHORS_FILE = '/app/test/fixtures/trust-anchor.pem'
+  # The reference issuer's real anchor. The throwaway CA in
+  # test/fixtures/trust-anchor.pem rejects every genuine credential with
+  # ISSUER_UNTRUSTED, and the eIDAS LOTL does not carry this issuer either.
+  TRUST_ANCHORS_FILE = '/app/test/fixtures/real/eudiw-pid-issuer-ca.pem'
   TRUST_MODE = 'pinned'
   WALLET_SCHEME = 'eudi-openid4vp://'
+  # The reference issuer emits an mdoc validUntil that is not valid RFC 3339.
+  MDOC_TOLERATE_MALFORMED_VALIDITY = 'true'
 
 [http_service]
   internal_port = 3000

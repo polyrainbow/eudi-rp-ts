@@ -26,6 +26,12 @@ export type ReasonCode =
   | 'RESPONSE_INVALID'
   | 'SESSION_UNKNOWN'
   | 'SESSION_EXPIRED'
+  /**
+   * The wallet declined and said why (OID4VP 1.0 §8.2). Distinct from
+   * `RESPONSE_INVALID`: the response was well-formed, it just carried an error
+   * instead of a presentation. `detail` holds the wallet's own error code.
+   */
+  | 'WALLET_ERROR'
   // Trust list retrieval (Phase 2)
   | 'TRUST_LIST_UNAVAILABLE'
   // Revocation
