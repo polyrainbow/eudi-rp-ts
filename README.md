@@ -116,7 +116,7 @@ deploy it as-is; use the library inside your own service.
 | Variable | Default | Notes |
 |---|---|---|
 | `PORT` | `3000` | Listen port (plain HTTP). |
-| `BASE_URL` | `https://localhost:3000` | Public https URL wallets reach. **Set this.** |
+| `BASE_URL` | `https://localhost:3000` | Public https URL wallets reach. **Set this.** Must be https, checked at startup — it is where the wallet posts the VP Token. |
 | `WALLET_SCHEME` | `eudi-openid4vp://` | Deep-link scheme. What the live EUDI reference infrastructure emits; its verifier README documents `haip-vp://`. |
 | `CLIENT_ID_PREFIX` | `redirect_uri` | Or `x509_san_dns`, or `x509_hash`. |
 | `CLIENT_DNS_NAME` | — | Required for `x509_san_dns` only; must match a dNSName SAN in the leaf. `x509_hash` needs no name. |

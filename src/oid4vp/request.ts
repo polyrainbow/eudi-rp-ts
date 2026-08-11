@@ -1,7 +1,7 @@
 import { Openid4vpVerifier } from '@openid4vc/openid4vp';
 import { exportJWK, generateKeyPair } from 'jose';
 import type { JWK } from 'jose';
-import { type VerifierIdentity, clientId, responseUri } from './identity.ts';
+import { type VerifierIdentity, clientId, responseUri, verifierBaseUrl } from './identity.ts';
 import { createEncryptJwe, createSignJwt, generateRandom, hashCallback } from './callbacks.ts';
 import { ageOver18Query } from './query.ts';
 
@@ -133,7 +133,7 @@ export async function buildAuthorizationRequest(config: VerifierIdentity): Promi
           jar: {
             jwtSigner: { method: 'x5c', alg: 'ES256', x5c: pemChainToBase64Der(config.accessCertificateChainPem!) },
             expiresInSeconds: config.requestTtlSeconds,
-            requestUri: `${config.baseUrl}/oid4vp/request/${requestObjectId}`,
+            requestUri: `${verifierBaseUrl(config)}/oid4vp/request/${requestObjectId}`,
           } as never,
         }
       : {}),

@@ -69,7 +69,7 @@ export {
   MDOC_CREDENTIAL_QUERY_ID,
   PID_MDOC_NAMESPACE,
 } from './oid4vp/query.ts';
-export { clientId, responseUri, x509Hash } from './oid4vp/identity.ts';
+export { clientId, responseUri, verifierBaseUrl, x509Hash } from './oid4vp/identity.ts';
 export type { ClientIdPrefix, VerifierIdentity } from './oid4vp/identity.ts';
 
 // Structured events for auditing and metrics. The library never logs.

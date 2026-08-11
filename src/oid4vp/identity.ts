@@ -75,7 +75,33 @@ export function x509Hash(chainPem: string): string {
   return createHash('sha256').update(der).digest('base64url');
 }
 
+/**
+ * The verifier's base URL, checked before anything is built on it.
+ *
+ * OID4VP 1.0 §14.6 requires TLS, and for `response_uri` the reason is not
+ * ceremony: that is where the wallet posts the VP Token, so an http base
+ * publishes a credential presentation in clear to anyone on the path. The same
+ * base serves `request_uri`, whose whole job under a signed request is to be
+ * fetched intact.
+ *
+ * No exemption for loopback. It would only help a wallet running on this
+ * machine, and a wallet on a phone cannot reach loopback anyway — which is what
+ * the demo warns about at startup when `BASE_URL` is left at localhost.
+ */
+export function verifierBaseUrl(identity: VerifierIdentity): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(identity.baseUrl);
+  } catch {
+    throw new Error(`baseUrl is not a valid URL: ${identity.baseUrl}`);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`baseUrl must be https (OID4VP 1.0 §14.6), got ${identity.baseUrl}`);
+  }
+  return identity.baseUrl;
+}
+
 /** Where the wallet posts the response for a given session. */
 export function responseUri(identity: VerifierIdentity, responseId: string): string {
-  return `${identity.baseUrl}/oid4vp/response/${responseId}`;
+  return `${verifierBaseUrl(identity)}/oid4vp/response/${responseId}`;
 }

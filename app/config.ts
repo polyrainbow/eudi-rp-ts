@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import type { ClientIdPrefix, VerifierIdentity } from '../src/oid4vp/identity.ts';
+import { type ClientIdPrefix, type VerifierIdentity, verifierBaseUrl } from '../src/oid4vp/identity.ts';
 import type { TrustListOptions } from '../src/trust/lotl.ts';
 
 /**
@@ -59,9 +59,9 @@ function envPem(name: string): string | undefined {
 
 export function loadConfig(): Config {
   const port = Number(env('PORT') ?? 3000);
-  // OID4VP 1.0 §14.6 requires TLS, and the library enforces https on
-  // `response_uri`. The server itself still listens on plain HTTP — put a
-  // tunnel or reverse proxy in front and set BASE_URL to its public URL.
+  // OID4VP 1.0 §14.6 requires TLS. The server itself still listens on plain
+  // HTTP — put a tunnel or reverse proxy in front and set BASE_URL to its
+  // public URL, which is the address the wallet actually uses.
   const baseUrl = (env('BASE_URL') ?? `https://localhost:${port}`).replace(/\/$/, '');
   const clientIdPrefix = (env('CLIENT_ID_PREFIX') ?? 'redirect_uri') as ClientIdPrefix;
 
@@ -113,6 +113,10 @@ export function loadConfig(): Config {
   if (config.trust.mode === 'pinned' && !config.trust.pinnedAnchorsPem) {
     throw new Error('TRUST_ANCHORS_FILE or TRUST_ANCHORS_PEM is required when TRUST_MODE=pinned');
   }
+  // The library refuses a non-https base too, but it does so when the first
+  // request is built. Calling it here turns that into a startup failure, which
+  // is where a deployment mistake should surface.
+  verifierBaseUrl(config);
 
   return config;
 }

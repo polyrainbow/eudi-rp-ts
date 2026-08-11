@@ -3,7 +3,7 @@ import { X509Certificate, createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { clientId, x509Hash } from '../src/oid4vp/identity.ts';
+import { clientId, responseUri, verifierBaseUrl, x509Hash } from '../src/oid4vp/identity.ts';
 import { buildAuthorizationRequest } from '../src/oid4vp/request.ts';
 import { createAccessCertificate } from '../scripts/make-access-cert.ts';
 
@@ -91,5 +91,24 @@ describe('x509_hash client identifier', () => {
       .update(Buffer.from(header.x5c[0], 'base64'))
       .digest('base64url');
     assert.equal(params.get('client_id'), `x509_hash:${recomputed}`);
+  });
+});
+
+describe('verifier base URL', () => {
+  it('refuses to build a request on a base that is not https', async () => {
+    // `response_uri` is where the wallet posts the VP Token. Over http that is
+    // a credential presentation published in clear to anyone on the path.
+    const insecure = { ...identity, baseUrl: 'http://verifier.test' };
+
+    assert.throws(() => responseUri(insecure, 'session'), /must be https/);
+    await assert.rejects(() => buildAuthorizationRequest(insecure), /must be https/);
+  });
+
+  it('refuses a base that is not a URL at all', () => {
+    assert.throws(() => responseUri({ ...identity, baseUrl: 'verifier.test' }, 'session'), /not a valid URL/);
+  });
+
+  it('accepts the https base every other test uses', () => {
+    assert.equal(verifierBaseUrl(identity), 'https://verifier.test');
   });
 });
