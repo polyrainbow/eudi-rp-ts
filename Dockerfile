@@ -9,11 +9,11 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY src ./src
-COPY public ./public
+COPY app ./app
 COPY test/fixtures ./test/fixtures
 
 ENV PORT=3000
 EXPOSE 3000
 
 USER node
-CMD ["node", "src/main.ts"]
+CMD ["node", "app/main.ts"]
