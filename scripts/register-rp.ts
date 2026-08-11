@@ -91,6 +91,16 @@ while (Date.now() < deadline) {
   if (!hashPid) continue;
 
   console.log(`\n\nhash_pid: ${hashPid}\n`);
+
+  // It is base64 of a SHA-256, so it can contain `+` and `/`. In a query
+  // string a raw `+` decodes as a space, which yields a wrong hash rather
+  // than an error — the failure is silent. Swagger UI encodes form fields
+  // itself; anyone reaching for curl needs this.
+  if (/[+/=]/.test(hashPid)) {
+    console.log(`URL-encoded, for query strings: ${encodeURIComponent(hashPid)}`);
+    console.log('(a raw `+` in a query string decodes as a space — silently wrong)\n');
+  }
+
   console.log('Every other endpoint takes this as `hash_pid`. Remaining steps, in order:');
   console.log('  law -> legal_person -> identifier -> legal_entity -> policy -> provider');
   console.log('  -> credential -> intended_use -> supervisory_authority -> wallet_rp');
