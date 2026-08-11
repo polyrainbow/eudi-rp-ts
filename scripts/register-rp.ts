@@ -45,6 +45,19 @@ async function showQrCode(url: string): Promise<void> {
   console.log(`QR code: ${file}`);
 }
 
+/**
+ * `/getpidoid4vp` advertises `produces: application/json`, but its documented
+ * 200 schema is a bare `string` and the service sends the hash unquoted — so
+ * the body is text, and `response.json()` throws on it. Accept the object form
+ * too, so this keeps working if that is ever tightened.
+ */
+function parseHashPid(body: string): string | undefined {
+  const text = body.trim();
+  if (!text) return undefined;
+  if (text.startsWith('{')) return (JSON.parse(text) as { hash_pid?: string }).hash_pid;
+  return text.replace(/^"|"$/g, '');
+}
+
 const start = await fetch(`${BASE}/authentication`);
 if (!start.ok) throw new Error(`${BASE}/authentication: HTTP ${start.status}`);
 const { QR_code_url, presentation_id } = (await start.json()) as {
@@ -74,10 +87,10 @@ while (Date.now() < deadline) {
   });
   if (!pid.ok) continue;
 
-  const body = (await pid.json()) as { hash_pid?: string };
-  if (!body.hash_pid) continue;
+  const hashPid = parseHashPid(await pid.text());
+  if (!hashPid) continue;
 
-  console.log(`\n\nhash_pid: ${body.hash_pid}\n`);
+  console.log(`\n\nhash_pid: ${hashPid}\n`);
   console.log('Every other endpoint takes this as `hash_pid`. Remaining steps, in order:');
   console.log('  law -> legal_person -> identifier -> legal_entity -> policy -> provider');
   console.log('  -> credential -> intended_use -> supervisory_authority -> wallet_rp');
