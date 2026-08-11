@@ -207,6 +207,22 @@ and `haip-vci://` URI schemes you see in EU reference deployments.
 **DC API** — the browser Digital Credentials API, an alternative to custom URI
 schemes for invoking a wallet from a web page.
 
+**PAR** — Pushed Authorization Requests, **RFC 9126**. The client POSTs the
+authorization request parameters to the AS's
+`pushed_authorization_request_endpoint` and receives a short-lived `request_uri`,
+which is then the only parameter in the front-channel authorization request. Not
+to be confused with JAR: PAR moves the parameters to a back channel, JAR signs
+them. The reference wallet uses PAR whenever the AS advertises the endpoint.
+
+**DPoP** — Demonstrating Proof of Possession at the Application Layer,
+**RFC 9449**. Sender-constrains an access token to a key, so a stolen token is
+useless on its own. The client sends a `DPoP` header holding a proof JWT
+(`typ: dpop+jwt`, with `htm`, `htu`, `jti`, `iat`, plus `ath` — a digest of the
+access token — once it has one), and the AS returns `token_type: DPoP` with the
+key's thumbprint in `cnf.jkt`. Thereafter the token travels as
+`Authorization: DPoP …` rather than `Bearer`. The EU reference issuer issues
+DPoP-bound tokens when the wallet asks for them.
+
 **Proof of possession** — in OID4VCI, a JWT (`typ: openid4vci-proof+jwt`) the
 wallet signs to prove it holds the key the credential will be bound to.
 
@@ -227,6 +243,18 @@ providers and their certificates, one per Member State. **(used here)**
 **LOTL** — List of Trusted Lists. The signed index pointing at every national
 trusted list. The EU one is at
 `https://ec.europa.eu/tools/lotl/eu-lotl.xml`. **(used here)**
+
+**LOTE** — List of Trusted Entities. The EUDI ecosystem's own trust list format,
+signed as a JWS with a JSON payload (`LoTE.ListAndSchemeInformation` plus
+`LoTE.TrustedEntitiesList`) rather than the signed XML of an eIDAS trusted list.
+Its list-type and service-type identifiers live under the
+`http://uri.etsi.org/19602/` namespace — e.g.
+`…/LoTEType/EUPIDProvidersList` and `…/SvcType/PID/Issuance`. This is where PID
+providers are published, because the eIDAS trusted lists do not cover them; the
+reference deployment publishes separate lists for PID providers, RP access CAs
+and public-body EAA providers under
+`https://trustedlist.serviceproviders.eudiw.dev/LOTE/json/`. Not the same thing
+as the **LOTL**, despite the near-identical name.
 
 **ETSI TS 119 615** — the procedures for *interpreting* a trusted list: service
 status history, qualifiers, validity at a point in time. This project implements
@@ -276,6 +304,8 @@ failure path ends at exactly one, so callers never parse error strings.
 | **SD-JWT VC** — JSON/JOSE, `vct` | **mdoc** — CBOR/COSE, `doctype` |
 | **RPAC** — access certificate, authenticates you to a wallet | **RPRC** — registration certificate, tells the user what you may ask for |
 | **eIDAS Trusted List** — qualified trust services | **EUDI provider lists** — PID providers, published separately |
+| **LOTL** — index of the national eIDAS trusted lists, signed XML | **LOTE** — EUDI list of trusted entities, signed JSON |
 | **`vct`** — SD-JWT VC type | **`doctype`** — mdoc type |
 | **JAR** — signed *request* | **JARM** — encrypted/signed *response* |
+| **JAR** — signs the request parameters | **PAR** — moves them to a back channel |
 | **Registrar** — approves and registers you | **Access CA** — issues your certificate |
