@@ -184,7 +184,7 @@ disclosures (RFC 9901); SD-JWT VC media types
 response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 `sd_hash`, `nonce`, and `aud` equal to the full prefixed Client Identifier
 (§14.8); x5c chain signature linkage and certificate validity windows; ETSI TS
-119 612 trust list signature verification, including RSASSA-PSS.
+119 612 trust list signature verification, including RSASSA-PSS and ECDSA.
 
 **Simplified, deliberately.**
 
@@ -320,7 +320,7 @@ LOTL — so the limits are policy rather than plumbing. All of them are options 
 | `timeoutMs` | 10 s | One deadline for the whole exchange, redirects included. |
 | `maxBytes` | 10 MB | A deadline bounds nothing alone: a body arriving steadily for ten seconds is still unbounded memory. Enforced while reading, not just against `Content-Length`. Trust lists ask for 20 MB — Germany's list is 5.4 MB. |
 | `maxRedirects` | 3 | The fetch specification allows twenty, which is far more indirection than any of these endpoints needs. |
-| `allowedProtocols` | `https:` only | Checked on every hop, so a redirect cannot walk off TLS. A trust list served over http cannot be forged — it is signature-checked — but it can be replayed, and a stale list still grants a CA that has since been withdrawn. |
+| `allowedProtocols` | `https:` only | Checked on every hop, so a redirect cannot walk off TLS. **Exception:** national trust lists also accept `http:`, because Slovakia publishes over it and the list's authenticity comes from an XML signature made with a certificate the (https, signed) LOTL published for it. The residual risk is replay of an older signed copy, which may still grant a since-withdrawn service. The LOTL itself stays https-only: it is where both the locations and the signing certificates come from. |
 
 ## Using it in a service
 
@@ -362,9 +362,13 @@ All handled in `src/`; all easy to get wrong by assuming otherwise.
    check it explicitly. Relatedly, key binding is verified *only* when a nonce is
    supplied; passing none silently skips it even when a KB-JWT is present, which
    is why `verifyCredential` throws rather than defaulting.
-3. **`xml-crypto` does not ship RSASSA-PSS.** Several member states sign their
-   trust lists with it (Germany's is `sha256-rsa-MGF1`), so without the
-   implementation in `src/trust/lotl.ts` those lists simply fail to verify.
+3. **`xml-crypto` ships neither RSASSA-PSS nor ECDSA.** Several member states
+   sign their trust lists with one or the other — Germany's is
+   `sha256-rsa-MGF1`, Greece and Slovenia use `ecdsa-sha512`, Hungary
+   `ecdsa-sha256` — so without the implementations in `src/trust/lotl.ts` those
+   lists fail to verify and their anchors are silently absent. The ECDSA half
+   turns on one detail: XMLDSig carries the signature as the raw r‖s pair
+   (RFC 4051 §2.3.6), while Node produces and expects DER unless told otherwise.
 
 ## Open questions
 

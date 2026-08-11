@@ -210,16 +210,45 @@ regardless of criticality, which is the stricter reading.
 The same run recorded six lists that did not load, none of them related to name
 constraints and all worth knowing:
 
-| Territory | Why |
-|---|---|
-| EL, SI | XMLDSig `ecdsa-sha512` unsupported by `xml-crypto` |
-| HU | XMLDSig `ecdsa-sha256`, likewise |
-| SK | Its `TSLLocation` is **http**, which `src/fetching.ts` refuses |
-| IE, PT | `fetch failed` — endpoint unreachable that day |
+| Territory | Why | Since |
+|---|---|---|
+| EL, SI | XMLDSig `ecdsa-sha512` unsupported by `xml-crypto` | **fixed** |
+| HU | XMLDSig `ecdsa-sha256`, likewise | **fixed** |
+| SK | Its `TSLLocation` is **http**, which `src/fetching.ts` refused | **fixed** |
+| IE, PT | TLS chain incomplete — see below | open |
 
-The ECDSA gap is the same shape as the RSASSA-PSS one already implemented in
-`src/trust/lotl.ts`, and is not yet filled. The Slovak one is a consequence of
-this project's own https-only policy, not of anything upstream.
+### After ECDSA and the http exception, same day
+
+```
+lists ok: 29, failed: 2, anchors: 2434
+  EL: OK 112 services    HU: OK 164 services
+  SI: OK  41 services    SK: OK 220 services
+```
+
+537 more anchors than the run above, from four member states that were silently
+absent.
+
+Ireland and Portugal remain, and it is worth being precise about why, because
+the symptom is misleading. `fetch failed` is not an outage:
+
+```
+$ curl -sS -o /dev/null -w '%{http_code}' https://eidas.gov.ie/Irelandtslsignedv6.xml
+200
+$ node -e "fetch('https://eidas.gov.ie/Irelandtslsignedv6.xml')" # cause:
+UNABLE_TO_VERIFY_LEAF_SIGNATURE
+```
+
+Both endpoints serve an incomplete TLS certificate chain — the intermediate is
+missing. curl and browsers paper over it by fetching the missing certificate
+from the AIA extension; Node does not, and should not be made to. Nothing in
+this repository can fix it without weakening TLS verification, and the servers
+are the thing that is wrong.
+
+There is an argument for reaching them anyway, not taken here: a national list's
+authenticity comes from its XML signature and not from the transport, which is
+exactly why http is now allowed for one. By that reasoning an unverifiable TLS
+chain is no worse than plain http. It is left open because "ignore TLS errors"
+is a much larger hammer than "allow a scheme", and worth deciding deliberately.
 
 ## 4. Full OID4VP round trip
 

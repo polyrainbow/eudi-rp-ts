@@ -69,6 +69,49 @@ class RsaPssSha256 implements SignatureAlgorithm {
 
 const RSA_PSS_SHA256 = 'http://www.w3.org/2007/05/xmldsig-more#sha256-rsa-MGF1';
 
+/**
+ * ECDSA, which xml-crypto does not ship either.
+ *
+ * Greece and Slovenia sign with `ecdsa-sha512`, Hungary with `ecdsa-sha256`;
+ * without these three lists fail to load and their anchors are simply absent.
+ *
+ * The detail that matters is the signature encoding. XMLDSig carries an ECDSA
+ * signature as the raw r‖s pair (RFC 4051 §2.3.6, IEEE P1363), while Node
+ * defaults to the DER sequence — so verification fails on a correct signature
+ * unless `dsaEncoding` says otherwise.
+ */
+function ecdsaAlgorithm(uri: string, hash: 'sha256' | 'sha384' | 'sha512') {
+  return class implements SignatureAlgorithm {
+    getSignature(signedInfo: BinaryLike, privateKey: KeyLike): string {
+      return sign(hash, Buffer.from(signedInfo as string), {
+        key: privateKey as never,
+        dsaEncoding: 'ieee-p1363',
+      }).toString('base64');
+    }
+
+    verifySignature(material: string, key: KeyLike, signatureValue: string): boolean {
+      return verify(
+        hash,
+        Buffer.from(material),
+        { key: key as never, dsaEncoding: 'ieee-p1363' },
+        Buffer.from(signatureValue, 'base64'),
+      );
+    }
+
+    getAlgorithmName() {
+      return uri as never;
+    }
+  };
+}
+
+export const XMLDSIG_ECDSA = ['sha256', 'sha384', 'sha512'].map((hash) => ({
+  uri: `http://www.w3.org/2001/04/xmldsig-more#ecdsa-${hash}`,
+  implementation: ecdsaAlgorithm(
+    `http://www.w3.org/2001/04/xmldsig-more#ecdsa-${hash}`,
+    hash as 'sha256' | 'sha384' | 'sha512',
+  ),
+}));
+
 /** Everything the trust list client needs. The app maps its config onto this. */
 export type TrustListOptions = {
   /** Trust list location, e.g. the EU List of Trusted Lists. */
@@ -138,7 +181,7 @@ export async function fetchTrustAnchors(
 
   for (const pointer of wanted) {
     try {
-      const xml = await fetchText(doFetch, pointer.url);
+      const xml = await fetchText(doFetch, pointer.url, NATIONAL_LIST_PROTOCOLS);
       verifyTrustList(xml, {
         // A national list is authenticated by the certificates the (signed)
         // LOTL published for it. That is the whole point of the LOTL.
@@ -182,6 +225,9 @@ export function verifyTrustList(
   const signedXml = new SignedXml({ publicCert: signingCertPem });
   // Registered per instance; xml-crypto exposes the table on the object.
   signedXml.SignatureAlgorithms[RSA_PSS_SHA256 as never] = RsaPssSha256;
+  for (const { uri, implementation } of XMLDSIG_ECDSA) {
+    signedXml.SignatureAlgorithms[uri as never] = implementation;
+  }
   signedXml.loadSignature(signatureNode);
   if (!signedXml.checkSignature(xml)) {
     throw new Error(`${options.label}: XML signature is not valid`);
@@ -243,15 +289,42 @@ export function parseServiceCertificates(xml: string, serviceTypes: string[]): X
  */
 const TRUST_LIST_MAX_BYTES = 20_000_000;
 
-async function fetchText(doFetch: typeof fetch, url: string): Promise<string> {
+/**
+ * National lists may be served over http; the LOTL may not.
+ *
+ * Slovakia publishes its `TSLLocation` as `http://tl.nbu.gov.sk/...`, and
+ * refusing it costs every Slovak anchor. Allowing it is defensible for a
+ * national list and only for a national list: its content is authenticated by
+ * an XML signature made with a certificate that the LOTL — fetched over https
+ * and signature-checked itself — published for exactly that list. An attacker
+ * on an http hop therefore cannot forge one.
+ *
+ * What they *can* still do is replay an older signed copy, and a stale list may
+ * still grant a service that has since been withdrawn. That residual risk is
+ * the price of Slovakia being in the set at all, and it is bounded by nothing
+ * here today — this implementation does not evaluate list issue dates (see
+ * "Trust lists are not fully TS 119 615" in the README).
+ *
+ * The LOTL keeps the https-only default because it is the root: it is where
+ * both the locations and the signing certificates come from, so an attacker who
+ * can rewrite it can point at anything.
+ */
+const NATIONAL_LIST_PROTOCOLS = ['https:', 'http:'];
+
+async function fetchText(
+  doFetch: typeof fetch,
+  url: string,
+  allowedProtocols?: readonly string[],
+): Promise<string> {
   // Trust lists are fetched from 40-odd national endpoints; one that never
   // answers must not stall startup indefinitely. A list that trips the size
-  // limit, the redirect budget or the https-only policy is recorded in
-  // `failures` rather than failing the whole run.
+  // limit or the redirect budget is recorded in `failures` rather than failing
+  // the whole run.
   const { body } = await fetchWithTimeout(url, {
     fetchImpl: doFetch,
     timeoutMs: DEFAULT_TIMEOUT_MS * 3,
     maxBytes: TRUST_LIST_MAX_BYTES,
+    ...(allowedProtocols ? { allowedProtocols } : {}),
   });
   return body;
 }

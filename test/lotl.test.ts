@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parsePointers, parseServiceCertificates, verifyTrustList } from '../src/trust/lotl.ts';
+import { generateKeyPairSync, sign } from 'node:crypto';
+import {
+  XMLDSIG_ECDSA,
+  parsePointers,
+  parseServiceCertificates,
+  verifyTrustList,
+} from '../src/trust/lotl.ts';
 
 /** Network tests are opt-in: RUN_NETWORK_TESTS=1 npm test */
 const online = process.env['RUN_NETWORK_TESTS'] === '1';
@@ -73,6 +79,54 @@ describe('trust list parsing', () => {
   it('honours the skip flag only when explicitly set', () => {
     // Guards the insecure escape hatch: it must do nothing unless asked.
     verifyTrustList(`<TrustServiceStatusList xmlns="${TSL}"/>`, { label: 'sample', skip: true });
+  });
+});
+
+describe('ECDSA, which xml-crypto does not ship', () => {
+  // The plumbing is one line; the encoding is the part that is easy to get
+  // wrong and silent when wrong. XMLDSig carries an ECDSA signature as the raw
+  // r‖s pair (RFC 4051 §2.3.6), while Node produces and expects the DER
+  // sequence unless told otherwise — so a correct signature fails to verify.
+  //
+  // Signing and verifying with the same encoding would pass either way and
+  // prove nothing, which is why each case also asserts that the DER form of the
+  // *same* signature over the *same* bytes is refused.
+  const cases = [
+    { hash: 'sha256', curve: 'prime256v1' },
+    { hash: 'sha384', curve: 'secp384r1' },
+    { hash: 'sha512', curve: 'secp521r1' },
+  ] as const;
+
+  for (const { hash, curve } of cases) {
+    it(`verifies the r‖s form of ecdsa-${hash} and refuses the DER form`, () => {
+      const uri = `http://www.w3.org/2001/04/xmldsig-more#ecdsa-${hash}`;
+      const implementation = XMLDSIG_ECDSA.find((entry) => entry.uri === uri);
+      assert.ok(implementation, `no implementation registered for ${uri}`);
+      const algorithm = new implementation.implementation();
+
+      const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: curve });
+      const material = '<SignedInfo>whatever was canonicalised</SignedInfo>';
+
+      const p1363 = sign(hash, Buffer.from(material), { key: privateKey, dsaEncoding: 'ieee-p1363' });
+      const der = sign(hash, Buffer.from(material), { key: privateKey, dsaEncoding: 'der' });
+
+      assert.equal(algorithm.verifySignature(material, publicKey as never, p1363.toString('base64')), true);
+      assert.equal(
+        algorithm.verifySignature(material, publicKey as never, der.toString('base64')),
+        false,
+        'accepting DER would mean the encoding is not being enforced at all',
+      );
+      assert.equal(algorithm.getAlgorithmName(), uri);
+    });
+  }
+
+  it('signs in the same encoding it verifies', () => {
+    const entry = XMLDSIG_ECDSA[0]!;
+    const algorithm = new entry.implementation();
+    const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+
+    const signature = algorithm.getSignature('material', privateKey as never);
+    assert.equal(algorithm.verifySignature('material', publicKey as never, signature), true);
   });
 });
 
