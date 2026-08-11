@@ -83,7 +83,7 @@ export type NameConstraintSet = {
 
 /** The Name Constraints of a certificate, or undefined if it carries none. */
 export function readNameConstraints(cert: X509Certificate): NameConstraintSet | undefined {
-  const extension = findExtension(cert, NAME_CONSTRAINTS);
+  const extension = findExtension(AsnConvert.parse(cert.raw, Certificate), NAME_CONSTRAINTS);
   if (!extension) return undefined;
 
   const parsed = AsnConvert.parse(extension.extnValue, NameConstraints);
@@ -110,7 +110,7 @@ export function certificateNames(cert: X509Certificate): GeneralNameValue[] {
   const subject = parsed.tbsCertificate.subject;
   if (subject.length > 0) names.push({ form: 'directoryName', rdns: toRdns(subject) });
 
-  const san = findExtension(cert, SUBJECT_ALT_NAME);
+  const san = findExtension(parsed, SUBJECT_ALT_NAME);
   if (san) {
     for (const entry of AsnConvert.parse(san.extnValue, GeneralNames)) {
       names.push(toGeneralNameValue(entry));
@@ -119,11 +119,11 @@ export function certificateNames(cert: X509Certificate): GeneralNameValue[] {
   return names;
 }
 
+/** Takes an already-parsed certificate: every verification walks a whole chain. */
 function findExtension(
-  cert: X509Certificate,
+  parsed: Certificate,
   oid: string,
 ): { critical: boolean; extnValue: ArrayBuffer } | undefined {
-  const parsed = AsnConvert.parse(cert.raw, Certificate);
   const found = (parsed.tbsCertificate.extensions ?? []).find((ext) => ext.extnID === oid);
   if (!found) return undefined;
   // `critical` is DEFAULT FALSE, so an absent field means non-critical. The

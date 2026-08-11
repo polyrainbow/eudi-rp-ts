@@ -11,6 +11,13 @@ export type ReasonCode =
   | 'ISSUER_KEY_UNRESOLVABLE'
   | 'ISSUER_UNTRUSTED'
   | 'ISSUER_SIGNATURE_INVALID'
+  /**
+   * A CA in the chain carries Name Constraints (RFC 5280 §4.2.1.10) that the
+   * certificate below it falls outside of. Distinct from `ISSUER_UNTRUSTED`:
+   * the chain links and reaches an anchor, but a CA on it was not entitled to
+   * certify this name.
+   */
+  | 'ISSUER_NAME_NOT_PERMITTED'
   // Validity window
   | 'CREDENTIAL_EXPIRED'
   | 'CREDENTIAL_NOT_YET_VALID'

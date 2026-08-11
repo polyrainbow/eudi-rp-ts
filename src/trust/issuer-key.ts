@@ -2,6 +2,8 @@ import { type KeyObject, X509Certificate } from 'node:crypto';
 import { decodeProtectedHeader } from '../crypto.ts';
 import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from './anchors.ts';
+import { certificateNames, readNameConstraints } from './name-constraints.ts';
+import { checkNames } from './name-matching.ts';
 
 /**
  * Resolve the public key that must have signed an SD-JWT VC, and prove that key
@@ -16,13 +18,13 @@ import type { TrustAnchors } from './anchors.ts';
  *
  * Checked here: validity windows, signature linkage between certificates, that
  * every issuing certificate is a CA, path length, an optional Extended Key
- * Usage allowlist, and termination at a trust anchor.
+ * Usage allowlist, Name Constraints, and termination at a trust anchor.
  *
  * NOT checked, and why:
  *   - **KeyUsage bits.** Node's `X509Certificate.keyUsage` exposes *extended*
  *     key usage OIDs, not the KeyUsage bit string, and Node offers no access to
  *     it. Enforcing it would mean parsing the DER extension by hand.
- *   - **Name constraints** and **certificate policies**, for the same reason.
+ *   - **Certificate policies**, for the same reason.
  *   - **Revocation of the certificates themselves** (CRL, OCSP). Credential
  *     revocation is handled by Token Status List; issuer certificate revocation
  *     is a separate mechanism this does not implement. In the EUDI model a
@@ -134,6 +136,14 @@ export function resolveIssuerCertificateChain(
     );
   }
 
+  const fullChain = equalAnchor ? chain : [...chain, signingAnchor];
+
+  // Applied to the chain including the anchor: a trust anchor that constrains
+  // itself to a namespace means it, and RFC 5280 §6.1 applies constraints from
+  // every certificate in the path.
+  const notPermitted = checkChainNameConstraints(fullChain);
+  if (notPermitted) return reject('ISSUER_NAME_NOT_PERMITTED', notPermitted);
+
   const leaf = chain[0]!;
 
   const requiredEku = options.requiredExtendedKeyUsage ?? [];
@@ -154,9 +164,48 @@ export function resolveIssuerCertificateChain(
     );
   }
 
-  return accept({
-    publicKey: leaf.publicKey,
-    leaf,
-    chain: equalAnchor ? chain : [...chain, signingAnchor],
-  });
+  return accept({ publicKey: leaf.publicKey, leaf, chain: fullChain });
+}
+
+/**
+ * Name Constraints across a whole path (RFC 5280 §4.2.1.10, §6.1.3).
+ *
+ * A CA that carries this extension is stating which names it is entitled to
+ * certify, and that statement binds every certificate below it — not just the
+ * one it signed directly. Without the check, any CA on any Member State's
+ * trusted list can vouch for any subject, which is most of what a constrained
+ * CA is for.
+ *
+ * `chain` is leaf-first, so a certificate at index i constrains 0..i-1.
+ *
+ * Failing to *read* a constraint is a rejection, not a skip. Malformed DER here
+ * means we cannot tell what the CA permitted, and a path validated by ignoring
+ * the question is not validated.
+ */
+function checkChainNameConstraints(chain: X509Certificate[]): string | undefined {
+  for (let issuer = 1; issuer < chain.length; issuer += 1) {
+    const authority = chain[issuer]!;
+
+    let constraints;
+    try {
+      constraints = readNameConstraints(authority);
+    } catch (error) {
+      return `Cannot read the name constraints of ${authority.subject}: ${String(error)}`;
+    }
+    if (!constraints) continue;
+
+    for (let subject = 0; subject < issuer; subject += 1) {
+      const constrained = chain[subject]!;
+      let failure: string | undefined;
+      try {
+        failure = checkNames(certificateNames(constrained), constraints);
+      } catch (error) {
+        return `Cannot read the names of ${constrained.subject}: ${String(error)}`;
+      }
+      if (failure) {
+        return `${authority.subject} does not permit ${constrained.subject}: ${failure}`;
+      }
+    }
+  }
+  return undefined;
 }

@@ -6,9 +6,10 @@ It verifies credentials correctly as far as it goes, and the README is explicit
 about where it stops. Before relying on it for anything real, read
 "Spec-compliant vs simplified" there. The gaps that matter most:
 
-- **Certificate path validation is partial.** Signature linkage and validity
-  windows are checked; name constraints, path length, key usage, EKU and
-  certificate policies are not. No CRL or OCSP for the issuer chain.
+- **Certificate path validation is partial.** Signature linkage, validity
+  windows, path length, an optional EKU allowlist and RFC 5280 Name Constraints
+  are checked; KeyUsage bits and certificate policies are not. No CRL or OCSP
+  for the issuer chain.
 - **Trust list processing is not full ETSI TS 119 615.** No service status
   history, no validity-time evaluation, no qualifier processing.
 - **Sessions are in memory**, so a restart drops them and more than one

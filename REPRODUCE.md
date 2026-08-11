@@ -186,6 +186,41 @@ Sizes that day, `curl -sL -o /dev/null -w '%{size_download}'`:
 Germany's is the largest of the set, which is where the 20 MB trust list ceiling
 comes from — the 10 MB general default would leave it under a factor of two.
 
+### Name Constraints across the whole trust list, 2026-08-11
+
+Enforcing RFC 5280 Name Constraints means deciding what to do with a name form
+the implementation does not cover. Rejecting is the safe answer and the one
+taken, but it is only free if no real CA uses such a form — so this was measured
+rather than assumed, by running `fetchTrustAnchors` over every territory and
+reading extension 2.5.29.30 off each anchor:
+
+```
+lists ok: 25, failed: 6, anchors: 1897
+anchors carrying Name Constraints: 2 of 1897
+subtree forms seen: dNSName=2  iPAddress=4
+  e.g. C=EE, O=AS Sertifitseerimiskeskus, CN=ESTEID-SK 2015
+       critical=false  permitted=0  excluded=3
+```
+
+Both are Estonian, both use only forms this code implements, and both carry
+*excluded* subtrees only. Note `critical=false`: RFC 5280 says conforming CAs
+MUST mark this extension critical, so these do not conform. The check is applied
+regardless of criticality, which is the stricter reading.
+
+The same run recorded six lists that did not load, none of them related to name
+constraints and all worth knowing:
+
+| Territory | Why |
+|---|---|
+| EL, SI | XMLDSig `ecdsa-sha512` unsupported by `xml-crypto` |
+| HU | XMLDSig `ecdsa-sha256`, likewise |
+| SK | Its `TSLLocation` is **http**, which `src/fetching.ts` refuses |
+| IE, PT | `fetch failed` — endpoint unreachable that day |
+
+The ECDSA gap is the same shape as the RSASSA-PSS one already implemented in
+`src/trust/lotl.ts`, and is not yet filled. The Slovak one is a consequence of
+this project's own https-only policy, not of anything upstream.
+
 ## 4. Full OID4VP round trip
 
 Against a local server:

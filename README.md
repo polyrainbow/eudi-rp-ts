@@ -192,11 +192,11 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
   via Token Status List **is** checked (see below); certificate revocation is
   not.
 - **Certificate path validation is partial.** Checked: validity windows,
-  signature linkage, that every issuing certificate is a CA, path length, and an
-  optional Extended Key Usage allowlist. Not checked: KeyUsage bits, name
-  constraints and certificate policies — Node's `X509Certificate` exposes
-  *extended* key usage but not the KeyUsage bit string, so enforcing those means
-  parsing DER by hand.
+  signature linkage, that every issuing certificate is a CA, path length, an
+  optional Extended Key Usage allowlist, and Name Constraints (see below). Not
+  checked: KeyUsage bits and certificate policies — Node's `X509Certificate`
+  exposes *extended* key usage but not the KeyUsage bit string, so enforcing
+  those means parsing DER by hand.
 - **No CRL or OCSP for issuer certificates.** Credential revocation is checked
   via Token Status List; certificate revocation relies on the issuer leaving the
   trusted list, which the refresh picks up. That is weaker, and worth knowing.
@@ -206,6 +206,37 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 - **Sessions are in memory** in the demo app. Restarting drops them, and more
   than one instance breaks them. The library holds no state.
 - **ES256 only**, matching what the reference issuer advertises.
+
+### Name Constraints
+
+A CA carrying this extension (RFC 5280 §4.2.1.10) is stating which names it is
+entitled to certify. Without the check, any CA on any Member State's trusted
+list can vouch for any subject — so a chain that links correctly and terminates
+at a trusted anchor can still be one no CA on it was authorised to produce. That
+rejection is `ISSUER_NAME_NOT_PERMITTED`, kept distinct from `ISSUER_UNTRUSTED`
+for exactly that reason.
+
+Constraints are applied across the whole path, anchor included, and bind every
+certificate below the one carrying them rather than only the one it signed.
+All five name forms the EUDI ecosystem could plausibly use are implemented —
+`dNSName`, `rfc822Name`, `uniformResourceIdentifier`, `iPAddress`,
+`directoryName` — each with its own matching rule, because they are not
+interchangeable.
+
+Two deliberate positions:
+
+- **A constraint we cannot evaluate fails the chain.** An unimplemented name
+  form, a malformed extension, or the `minimum`/`maximum` fields RFC 5280
+  forbids all reject rather than being skipped. A path validated by ignoring the
+  one statement a CA made about its own authority is not validated.
+- **DN comparison is simplified.** Attribute values are compared
+  case-insensitively on trimmed, whitespace-collapsed text, not under RFC 4518
+  string preparation. An attribute that is not a readable string type matches
+  nothing at all.
+
+Measured against the live eIDAS trust lists on 2026-08-11: 2 of 1897 anchors
+carry the extension, using only `dNSName` and `iPAddress`. So failing closed on
+an unimplemented form costs nothing today — see REPRODUCE.md.
 
 ## mdoc
 
