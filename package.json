@@ -1,6 +1,6 @@
 {
   "name": "@sauseschritt/eudi-rp-ts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Reference implementation of an EU Digital Identity relying party for Node — verifies SD-JWT VC and ISO mdoc credentials over OpenID4VP 1.0, with ETSI 119 612 trust lists and status-list revocation. Not affiliated with the European Commission.",
   "main": "./dist/index.js",
   "scripts": {
