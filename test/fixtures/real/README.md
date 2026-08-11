@@ -40,6 +40,11 @@ issuances — so `test/real-credential.test.ts` and `test/mdoc.test.ts` each pin
 fixed `now`. After those dates the credentials are still useful for structural
 assertions but will fail validity checks against the real clock.
 
+You will not have to remember that. `test/fixture-freshness.test.ts` reads both
+dates out of these files, prints a warning within 30 days of expiry and fails
+the build afterwards, with the commands for refetching. It is the one test in
+the suite that says nothing about `src/`.
+
 ## Why it is worth having
 
 It is the only artefact in this repo that proves interoperability rather than
