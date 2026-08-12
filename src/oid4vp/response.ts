@@ -20,6 +20,8 @@ export type PresentationContext = {
   config: VerifierIdentity;
   /** Shared status list cache, if the application keeps one. */
   statusCache?: TtlCache<string>;
+  /** Shared CRL/OCSP cache, if the application keeps one. */
+  revocationCache?: TtlCache<Uint8Array>;
   anchors: TrustAnchors;
   nonce: string;
   requestPayload: Record<string, unknown>;
@@ -171,6 +173,8 @@ async function verifySdJwt(
     expectedVct: context.config.requestedVct,
     checkStatus: context.config.checkStatus,
     ...(context.statusCache ? { statusCache: context.statusCache } : {}),
+    checkCertificateRevocation: context.config.checkCertificateRevocation,
+    ...(context.revocationCache ? { revocationCache: context.revocationCache } : {}),
     keyBinding: { nonce: context.nonce, audience },
   });
 
@@ -203,6 +207,8 @@ async function verifyMdocPresentation(
     // credential's status is checked.
     checkStatus: context.config.checkStatus,
     ...(context.statusCache ? { statusCache: context.statusCache } : {}),
+    checkCertificateRevocation: context.config.checkCertificateRevocation,
+    ...(context.revocationCache ? { revocationCache: context.revocationCache } : {}),
   });
   if (!result.verified) return result;
 

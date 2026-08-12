@@ -17,6 +17,7 @@ export type { AgeResult };
 import type { TrustAnchors } from './trust/anchors.ts';
 import { type PathValidationOptions, resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
 import { createStatusChecker } from './trust/status.ts';
+import { checkChainRevocation, revocationRejection, revocationVia } from './trust/revocation.ts';
 import type { TtlCache } from './fetching.ts';
 import { type EventSink, noopSink } from './events.ts';
 
@@ -66,6 +67,21 @@ export type VerifyCredentialOptions = {
   statusCache?: TtlCache<string>;
   /** Abort a status list request after this long. */
   statusTimeoutMs?: number;
+  /**
+   * Check the issuer's *certificate chain* for revocation, via CRL or OCSP.
+   *
+   * On by default and fails closed, like `checkStatus` — and answering a
+   * different question from it. A certificate that publishes neither mechanism
+   * is not a failure; one that publishes a CRL we cannot reach is. Requires
+   * network access to the CA, so tests that must stay offline turn it off.
+   */
+  checkCertificateRevocation?: boolean;
+  /** Injectable fetch for CRL and OCSP retrieval, for tests. */
+  revocationFetch?: typeof fetch;
+  /** Shared CRL/OCSP cache. A CRL covers every certificate its CA ever issued. */
+  revocationCache?: TtlCache<Uint8Array>;
+  /** Abort a CRL or OCSP request after this long. */
+  revocationTimeoutMs?: number;
   /** Tolerance for clock differences with the issuer, in seconds. */
   clockSkewSeconds?: number;
   /** Extra constraints on the issuer's certificate chain. */
@@ -286,6 +302,23 @@ export async function verifyCredential(
       cached: options.statusCache !== undefined,
     });
   }
+
+  // Last, because it reaches the network and everything above can reject
+  // without it. The chain is the one `resolveIssuerKeyFromX5c` returned, so
+  // this checks what was actually trusted rather than re-deriving it.
+  if (options.checkCertificateRevocation ?? true) {
+    const revocation = await checkChainRevocation(issuer.value.chain, {
+      now,
+      ...(options.revocationFetch ? { fetchImpl: options.revocationFetch } : {}),
+      ...(options.revocationCache ? { cache: options.revocationCache } : {}),
+      ...(options.revocationTimeoutMs ? { timeoutMs: options.revocationTimeoutMs } : {}),
+      ...(options.clockSkewSeconds ? { clockSkewSeconds: options.clockSkewSeconds } : {}),
+    });
+    emit({ type: 'issuer.revocation.checked', outcome: revocation.kind, via: revocationVia(revocation) });
+    const rejected = revocationRejection(revocation);
+    if (rejected) return rejectWith(rejected);
+  }
+
   emit({ type: 'verification.accepted', vct, durationMs: Date.now() - startedAt });
 
   return accept({

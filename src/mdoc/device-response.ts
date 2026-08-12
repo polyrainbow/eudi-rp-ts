@@ -33,11 +33,15 @@ export type DeviceResponseOptions = {
   pathValidation?: PathValidationOptions;
   now?: Date;
   tolerateMalformedValidityDates?: boolean;
-  /** Revocation, handled by `verifyMdoc`; on by default and fails closed. */
+  /** Revocation, both kinds handled by `verifyMdoc`; on by default, fails closed. */
   checkStatus?: boolean;
   statusFetch?: typeof fetch;
   statusCache?: TtlCache<string>;
   statusTimeoutMs?: number;
+  checkCertificateRevocation?: boolean;
+  revocationFetch?: typeof fetch;
+  revocationCache?: TtlCache<Uint8Array>;
+  revocationTimeoutMs?: number;
   clockSkewSeconds?: number;
 };
 
@@ -100,6 +104,12 @@ export async function verifyDeviceResponse(
     ...(options.statusFetch ? { statusFetch: options.statusFetch } : {}),
     ...(options.statusCache ? { statusCache: options.statusCache } : {}),
     ...(options.statusTimeoutMs ? { statusTimeoutMs: options.statusTimeoutMs } : {}),
+    ...(options.checkCertificateRevocation !== undefined
+      ? { checkCertificateRevocation: options.checkCertificateRevocation }
+      : {}),
+    ...(options.revocationFetch ? { revocationFetch: options.revocationFetch } : {}),
+    ...(options.revocationCache ? { revocationCache: options.revocationCache } : {}),
+    ...(options.revocationTimeoutMs ? { revocationTimeoutMs: options.revocationTimeoutMs } : {}),
     ...(options.clockSkewSeconds ? { clockSkewSeconds: options.clockSkewSeconds } : {}),
   });
   if (!verified.verified) return verified;

@@ -17,7 +17,7 @@ Node runs the TypeScript as-is.
 
 ```bash
 npm install
-npm test                      # 94 tests, fully offline
+npm test                      # 209 tests, fully offline
 RUN_NETWORK_TESTS=1 npm test  # also verifies the live EU trust lists
 npm start                     # http://localhost:3000
 ```
@@ -68,7 +68,8 @@ src/predicate/age.ts      age_equal_or_over["18"], birthdate
 src/trust/anchors.ts      the trust anchor set
 src/trust/issuer-key.ts   x5c resolution + chain validation   <- the part no library does
 src/trust/lotl.ts         ETSI TS 119 612 trust list client   <- no Node implementation existed
-src/trust/status.ts       Token Status List revocation
+src/trust/status.ts       Token Status List revocation (the credential)
+src/trust/revocation.ts   CRL and OCSP                 (the issuer's certificates)
 src/mdoc/verify.ts        ISO 18013-5 mdoc, through the same trust layer
 src/mdoc/device-response.ts     DeviceResponse + device authentication
 src/mdoc/cose.ts          COSE_Sign1 verification
@@ -124,6 +125,7 @@ deploy it as-is; use the library inside your own service.
 | `ACCESS_CERT_CHAIN_PEM` / `ACCESS_CERT_KEY_PEM` | — | Same, inline. For hosts with no filesystem for secrets. |
 | `REQUESTED_VCT` | `urn:eudi:pid:1` | Credential type to ask for. |
 | `STATUS_CHECK` | `true` | Verify each credential's status list. Set `false` only for an offline demo. |
+| `CERT_REVOCATION_CHECK` | `true` | Check the issuer's certificate chain by CRL or OCSP. Fails closed, so set `false` if the CA's endpoints are unreachable from your deployment. |
 | `MDOC_TOLERATE_MALFORMED_VALIDITY` | `false` | Accept an mdoc whose `validUntil` is not valid RFC 3339. Needed for the EU reference issuer today; see upstream issue #177. |
 | `TRUST_MODE` | `pinned` | Or `lotl`. |
 | `TRUST_ANCHORS_FILE` / `TRUST_ANCHORS_PEM` | — | PEM anchors, required for `pinned`. Path or inline. |
@@ -177,7 +179,9 @@ reveals nothing else. A test asserts the verifier learns nothing more.
 
 ## Spec-compliant vs simplified
 
-**Compliant.** Token Status List revocation **for both credential formats**,
+**Compliant.** Certificate revocation by CRL (RFC 5280 §5) and OCSP (RFC 6960),
+including verifying the CRL's or response's own signature and bounding its
+freshness; Token Status List revocation **for both credential formats**,
 including verifying the status list token's own signature against the same trust
 anchors, that its `sub` is the URI the credential named, and that it has not
 expired; SD-JWT digests and
@@ -190,18 +194,12 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 
 **Simplified, deliberately.**
 
-- **No CRL or OCSP** for the issuer's certificate chain. Credential revocation
-  via Token Status List **is** checked (see below); certificate revocation is
-  not.
 - **Certificate path validation is partial.** Checked: validity windows,
   signature linkage, that every issuing certificate is a CA, path length, an
-  optional Extended Key Usage allowlist, and Name Constraints (see below). Not
-  checked: KeyUsage bits and certificate policies — Node's `X509Certificate`
-  exposes *extended* key usage but not the KeyUsage bit string, so enforcing
-  those means parsing DER by hand.
-- **No CRL or OCSP for issuer certificates.** Credential revocation is checked
-  via Token Status List; certificate revocation relies on the issuer leaving the
-  trusted list, which the refresh picks up. That is weaker, and worth knowing.
+  optional Extended Key Usage allowlist, Name Constraints (see below), and
+  revocation by CRL or OCSP (see below). Not checked: KeyUsage bits and
+  certificate policies — Node's `X509Certificate` exposes *extended* key usage
+  but not the KeyUsage bit string, so enforcing those means parsing DER by hand.
 - **Trust lists are not fully TS 119 615.** Service status history and
   validity-time evaluation *are* implemented (see below). Not implemented: no
   qualifier processing, no `Sie` extensions, and no use of the list's own issue
@@ -374,6 +372,62 @@ verification refetches the same document. Concurrent misses on the same URL
 collapse into a single fetch, and a *failed* fetch is remembered for 30 seconds
 — verification still fails closed either way, but without that the issuer's
 outage becomes one here, at one full timeout per credential.
+
+### Certificate revocation: CRL and OCSP
+
+The status list above revokes a **credential**. This revokes the **certificates
+that signed it** — a different question, and neither substitutes for the other.
+A credential can be withdrawn while its issuer is impeccable, and an issuer's
+key can be compromised without any individual credential being withdrawn.
+
+`src/trust/revocation.ts` checks every certificate in the resolved path except
+the anchor, each against the certificate above it. A self-signed anchor cannot
+meaningfully revoke itself; its withdrawal is expressed by leaving the trusted
+list, which the refresh picks up.
+
+**It is a separate step from path validation, and has to be.** Path validation
+is synchronous — `@sd-jwt`'s `statusVerifier` is a `(data, signature) => boolean`
+callback with nowhere to await — while revocation needs the network. So
+`resolveIssuerCertificateChain` establishes the chain and the check runs against
+the chain it returned, which is also what guarantees it checks what was actually
+trusted rather than re-deriving it.
+
+**OCSP is preferred, CRL is the fallback.** An OCSP response is one
+certificate's status now; a CRL is every revocation the CA has ever issued, and
+is correspondingly staler and larger. If the responder cannot be reached the CRL
+is still tried — two mechanisms being down is a different situation from one.
+
+Both documents are authenticated before anything is read out of them:
+
+- **The signature**, against the issuing CA. For OCSP that may instead be a
+  delegated responder, which must be signed by the same CA *and* carry the
+  `id-kp-OCSPSigning` extended key usage — without that check, any certificate
+  the CA ever issued could answer for every certificate the CA ever issued.
+- **Freshness.** A CRL past its `nextUpdate` is refused, and so is one that
+  states no `nextUpdate` at all: a document whose freshness cannot be bounded is
+  indistinguishable from a replayed copy from any point in the past. Same for an
+  OCSP response past its `nextUpdate`. This is what makes it safe for a CRL
+  distribution point to be plain `http:`, as most are — the CA's signature makes
+  forgery impossible and `nextUpdate` bounds the replay window.
+
+**It fails closed** (`ISSUER_REVOCATION_UNAVAILABLE`), like the status list. An
+OCSP `unknown` is *not* a clean bill of health and counts as unavailable. The
+one case that is not fail-closed is a certificate publishing neither a CRL
+distribution point nor a responder: a CA that published nothing has not told us
+something we are ignoring, so there is nothing to check and the path passes.
+
+Measured against the EU reference infrastructure on 2026-08-12: both the PID
+document signer and its CA publish a CRL over https — 457 bytes, ECDSA-signed,
+`nextUpdate` two days out — and **neither runs an OCSP responder**; the leaf's
+AIA carries `caIssuers` only. So CRL is the mechanism that is exercised against
+real infrastructure, and OCSP is exercised only against fixtures. Its `CertID`
+construction (RFC 6960 §4.1.1) is pinned byte-for-byte against OpenSSL by
+`scripts/check-ocsp-certid.sh`, because a fixture written by the same hand as the
+verifier would otherwise agree with it about a mistake. See REPRODUCE.md.
+
+Pass a shared `revocationCache` (`createRevocationCache()`) in anything serving
+traffic: a CRL covers every certificate its CA ever issued, so refetching it per
+credential is the difference between one request and one per holder.
 
 ### What an outbound request is allowed to do
 

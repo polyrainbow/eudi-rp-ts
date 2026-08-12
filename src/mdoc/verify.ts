@@ -4,6 +4,7 @@ import type { TtlCache } from '../fetching.ts';
 import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
 import { type PathValidationOptions, resolveIssuerCertificateChain } from '../trust/issuer-key.ts';
+import { checkChainRevocation, revocationRejection } from '../trust/revocation.ts';
 import { type StatusListReference, checkStatusList } from '../trust/status.ts';
 import { decode, decodeEmbedded, encodeTag24, entriesOf, get, toBytes, untag } from './cbor.ts';
 import { coseAlg, coseX5Chain, parseCoseSign1, verifyCoseSign1 } from './cose.ts';
@@ -60,6 +61,17 @@ export type MdocVerifyOptions = {
   statusCache?: TtlCache<string>;
   /** Abort a status list request after this long. */
   statusTimeoutMs?: number;
+  /**
+   * Check the issuer's *certificate chain* for revocation, via CRL or OCSP.
+   * On by default and fails closed, exactly as for SD-JWT VC.
+   */
+  checkCertificateRevocation?: boolean;
+  /** Injectable fetch for CRL and OCSP retrieval, for tests. */
+  revocationFetch?: typeof fetch;
+  /** Shared CRL/OCSP cache. */
+  revocationCache?: TtlCache<Uint8Array>;
+  /** Abort a CRL or OCSP request after this long. */
+  revocationTimeoutMs?: number;
   /** Tolerance for clock differences with the issuer, in seconds. */
   clockSkewSeconds?: number;
 };
@@ -189,6 +201,20 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
         return reject('STATUS_UNAVAILABLE', outcome.detail);
       }
     }
+  }
+
+  // The issuer's own certificates, which is a different question from the
+  // credential's status list above.
+  if (options.checkCertificateRevocation ?? true) {
+    const revocation = await checkChainRevocation(trusted.value.chain, {
+      now,
+      ...(options.revocationFetch ? { fetchImpl: options.revocationFetch } : {}),
+      ...(options.revocationCache ? { cache: options.revocationCache } : {}),
+      ...(options.revocationTimeoutMs ? { timeoutMs: options.revocationTimeoutMs } : {}),
+      ...(options.clockSkewSeconds ? { clockSkewSeconds: options.clockSkewSeconds } : {}),
+    });
+    const rejected = revocationRejection(revocation);
+    if (rejected) return rejected;
   }
 
   return accept({

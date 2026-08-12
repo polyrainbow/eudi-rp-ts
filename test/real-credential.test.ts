@@ -24,8 +24,9 @@ const NOW = new Date('2026-09-01T00:00:00Z');
 
 /** It was issued, never presented, so it carries no Key Binding JWT. */
 /**
- * `checkStatus: false` keeps these offline. The real status list is exercised
- * separately, network-gated, at the bottom of this file.
+ * `checkStatus: false` and `checkCertificateRevocation: false` keep these
+ * offline: the credential names a live status list, and its issuer's chain a
+ * live CRL. Both are exercised separately, network-gated, at the bottom.
  */
 const options = {
   credential,
@@ -33,6 +34,7 @@ const options = {
   expectedVct: 'urn:eudi:pid:1',
   requireKeyBinding: false,
   checkStatus: false,
+  checkCertificateRevocation: false,
   now: NOW,
 };
 
@@ -113,6 +115,7 @@ describe('real credential over OID4VP', { skip: expired ? `credential expired ${
       requestedVct: 'urn:eudi:pid:1',
       requestTtlSeconds: 300,
     checkStatus: false,
+    checkCertificateRevocation: false,
     tolerateMalformedMdocValidity: false,
       trust: {
         mode: 'pinned' as const,
@@ -185,6 +188,7 @@ describe('real status list (network)', { skip: process.env['RUN_NETWORK_TESTS'] 
       expectedVct: 'urn:eudi:pid:1',
       requireKeyBinding: false,
       checkStatus: true,
+      checkCertificateRevocation: true,
       now: new Date(),
     });
 
@@ -192,6 +196,28 @@ describe('real status list (network)', { skip: process.env['RUN_NETWORK_TESTS'] 
     // prove the list was fetched, authenticated and read.
     if (!result.verified) {
       assert.equal(result.reason, 'CREDENTIAL_REVOKED', result.detail);
+    }
+  });
+
+  it('fetches and verifies the issuer chain\'s live CRL', async () => {
+    // Both the PID document signer and its CA publish a CRL, and neither runs
+    // an OCSP responder — so this is the only revocation mechanism the real EU
+    // infrastructure offers, and the only one this can exercise for real.
+    const result = await verifyCredential({
+      credential,
+      anchors,
+      expectedVct: 'urn:eudi:pid:1',
+      requireKeyBinding: false,
+      checkStatus: false,
+      checkCertificateRevocation: true,
+      now: new Date(),
+    });
+
+    // Either the chain is still good, or the CA has revoked it since — both
+    // prove the CRL was fetched, its signature checked against the CA, its
+    // freshness bounded by nextUpdate, and the serial looked up.
+    if (!result.verified) {
+      assert.equal(result.reason, 'ISSUER_CERTIFICATE_REVOKED', result.detail);
     }
   });
 
@@ -206,6 +232,7 @@ describe('real status list (network)', { skip: process.env['RUN_NETWORK_TESTS'] 
       expectedDocType: 'eu.europa.ec.eudi.pid.1',
       tolerateMalformedValidityDates: true,
       checkStatus: true,
+      checkCertificateRevocation: true,
       now: new Date(),
     });
 

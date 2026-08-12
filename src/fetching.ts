@@ -53,6 +53,20 @@ export async function fetchText(
   url: string,
   init: RequestInit & FetchOptions = {},
 ): Promise<{ body: string; contentType: string }> {
+  const { body, contentType } = await fetchBytes(url, init);
+  return { body: Buffer.from(body).toString('utf8'), contentType };
+}
+
+/**
+ * The same, for content that is not text.
+ *
+ * CRLs and OCSP responses are DER, and decoding them as UTF-8 first would
+ * corrupt them — every policy above applies unchanged.
+ */
+export async function fetchBytes(
+  url: string,
+  init: RequestInit & FetchOptions = {},
+): Promise<{ body: Uint8Array; contentType: string }> {
   const {
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxBytes = DEFAULT_MAX_BYTES,
@@ -124,14 +138,14 @@ function requireAllowedProtocol(target: string, allowed: readonly string[], orig
  * the sender and chunked responses omit it. The count while reading is the
  * enforcement; the header only saves a transfer we know will fail.
  */
-async function readCapped(response: Response, url: string, maxBytes: number): Promise<string> {
+async function readCapped(response: Response, url: string, maxBytes: number): Promise<Uint8Array> {
   const declared = response.headers.get('content-length');
   if (declared !== null && Number(declared) > maxBytes) {
     await discard(response);
     throw new Error(`${url}: declared ${declared} bytes, limit is ${maxBytes}`);
   }
 
-  if (!response.body) return '';
+  if (!response.body) return new Uint8Array(0);
 
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -148,7 +162,7 @@ async function readCapped(response: Response, url: string, maxBytes: number): Pr
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return new Uint8Array(Buffer.concat(chunks));
 }
 
 /** Release a body we are not going to read, so the socket is not held open. */

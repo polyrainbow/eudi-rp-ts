@@ -287,7 +287,8 @@ as the **LOTL**, despite the near-identical name.
 
 **ETSI TS 119 615** — the procedures for *interpreting* a trusted list: service
 status history, qualifiers, validity at a point in time. This project implements
-a deliberately simplified subset.
+service status history and validity-time evaluation; qualifiers and `Sie`
+extensions it does not. **(partly used here)**
 
 **QTSP / TSP** — (Qualified) Trust Service Provider. The entities a trusted list
 lists. Note the eIDAS trusted lists cover qualified trust services, **not** EUDI
@@ -305,8 +306,55 @@ warn the user when a verifier asks for more.
 How both issuers and verifiers ship their certificates inline. Note the EU
 reference issuer puts *only the leaf* there. **(used here)**
 
-**AIA** — Authority Information Access, an X.509 extension. Its *CA Issuers*
-URI is where you fetch an issuing CA that was not included in `x5c`.
+**AIA** — Authority Information Access, an X.509 extension (**RFC 5280
+§4.2.2.1**). Its *CA Issuers* URI is where you fetch an issuing CA that was not
+included in `x5c`; its *OCSP* URI names the responder to ask about the
+certificate's revocation. The EU reference PID signer publishes the first and
+**not** the second. **(used here — the OCSP URI, when a certificate has one)**
+
+**CRL** — Certificate Revocation List, **RFC 5280 §5**. A list, signed by a CA,
+of the serial numbers of certificates it has revoked, with a `thisUpdate` and a
+`nextUpdate` bounding how long it may be relied on. A certificate says where its
+CA publishes one in the **CRL Distribution Points** extension (§4.2.1.13).
+Answers "has this certificate been withdrawn", which is a different question
+from a **status list**, which answers "has this *credential* been withdrawn".
+Both the EU reference PID signer and its CA publish one. **(used here — checked
+by default, and failing closed; a CRL past its `nextUpdate` is refused rather
+than relied on)**
+
+**CRL Distribution Point / CRLDP** — the X.509 extension naming the URL where a
+certificate's CRL is published. Commonly plain `http:`, which is safe because
+the CRL is signed by the CA and verified after fetching; the residual risk is
+replay of an older CRL, which `nextUpdate` bounds. **(used here)**
+
+**OCSP** — Online Certificate Status Protocol, **RFC 6960**. Instead of
+downloading every revocation a CA has ever issued, ask the CA's responder about
+one certificate and get a signed answer: `good`, `revoked`, or `unknown`. The
+request identifies the certificate by a **CertID** — the SHA-1 hashes of the
+issuer's name and public key, plus the serial number (§4.1.1) — rather than by
+sending the certificate itself. Fresher and smaller than a CRL, at the cost of
+an online dependency at verification time. `unknown` is not a clean bill of
+health. **(used here — preferred over CRL when a certificate publishes both;
+no EU reference issuer runs a responder today)**
+
+**OCSP stapling** — the server presenting a recent OCSP response itself rather
+than the client asking the responder. A TLS mechanism; it has no equivalent in
+OID4VP, where the credential arrives from a wallet rather than from the issuer.
+**(not applicable here)**
+
+**Delegated OCSP responder** — a certificate, issued by the CA, that answers
+OCSP on the CA's behalf. It must carry the `id-kp-OCSPSigning` extended key
+usage (`1.3.6.1.5.5.7.3.9`); without checking that, any certificate the CA ever
+issued could answer for every certificate the CA ever issued. **(used here —
+accepted only with the EKU)**
+
+**Soft-fail / hard-fail** — what a verifier does when revocation information
+cannot be fetched. Soft-fail accepts anyway (common in browsers, because
+responders are unreliable); hard-fail rejects. This project hard-fails, on the
+same reasoning as the status list: a check you could not perform is not a check.
+A certificate that publishes *no* revocation information at all is a separate
+case and is accepted — the CA has not told us anything we are ignoring.
+**(used here — hard-fail)**
 
 ---
 

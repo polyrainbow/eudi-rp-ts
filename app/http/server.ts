@@ -7,6 +7,7 @@ import { buildAuthorizationRequest } from '../../src/oid4vp/request.ts';
 import { verifyPresentationResponse } from '../../src/oid4vp/response.ts';
 import type { TrustAnchors } from '../../src/trust/anchors.ts';
 import { createStatusListCache } from '../../src/trust/status.ts';
+import { createRevocationCache } from '../../src/trust/revocation.ts';
 import { SessionStore } from './session.ts';
 
 const PAGE = readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8');
@@ -26,8 +27,10 @@ const PAGE = readFileSync(fileURLToPath(new URL('../public/index.html', import.m
 export function createVerifierServer(config: Config, getAnchors: TrustAnchors | (() => TrustAnchors)) {
   const sessions = new SessionStore();
   const anchorsNow = typeof getAnchors === 'function' ? getAnchors : () => getAnchors;
-  // One cache for the process: status lists cover many credentials.
+  // One cache each for the process: a status list covers many credentials, and
+  // a CRL covers every certificate its CA ever issued.
   const statusCache = createStatusListCache();
+  const revocationCache = createRevocationCache();
 
   return createServer((req, res) => {
     handle(req, res).catch((error) => {
@@ -135,6 +138,7 @@ export function createVerifierServer(config: Config, getAnchors: TrustAnchors | 
         config,
         anchors: anchorsNow(),
         statusCache,
+        revocationCache,
         tolerateMalformedMdocValidity: config.tolerateMalformedMdocValidity,
         nonce: session.nonce,
         requestPayload: session.requestPayload,

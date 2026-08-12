@@ -28,10 +28,12 @@ const base = {
   expectedDocType: 'eu.europa.ec.eudi.pid.1',
   // The reference issuer emits a malformed validUntil; see the assertions below.
   tolerateMalformedValidityDates: true,
-  // The real credential carries a live status list at issuer.eudiw.dev. These
-  // assertions are about the signature and digests, so they stay offline; the
-  // status path has its own suite below and in test/status.test.ts.
+  // The real credential carries a live status list at issuer.eudiw.dev, and its
+  // chain a live CRL at preprod.pki.eudiw.dev. These assertions are about the
+  // signature and digests, so they stay offline; both revocation paths have
+  // their own suites below and in test/status.test.ts.
   checkStatus: false,
+  checkCertificateRevocation: false,
   now: NOW,
 };
 
@@ -302,8 +304,10 @@ describe('device authentication', () => {
     expectedDocType: 'eu.europa.ec.eudi.pid.1',
     tolerateMalformedValidityDates: true,
     // These assertions are about the device signature; revocation has its own
-    // suite. Left on, the real credential's status list would be fetched live.
+    // suite. Left on, the real credential's status list and its issuer's CRL
+    // would both be fetched live.
     checkStatus: false,
+    checkCertificateRevocation: false,
     now: NOW,
   };
   const present = (overrides = {}) =>

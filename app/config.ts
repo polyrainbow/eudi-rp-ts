@@ -84,6 +84,10 @@ export function loadConfig(): Config {
     // Accepting a credential whose revocation status you did not check is
     // accepting a revoked one. Off only for an offline demo.
     checkStatus: env('STATUS_CHECK') !== 'false',
+    // Accepting a credential signed by a certificate the CA has revoked is
+    // accepting an issuer that is no longer trusted to have issued it. Off only
+    // for an offline demo, or where the CA's CRL endpoint is unreachable.
+    checkCertificateRevocation: env('CERT_REVOCATION_CHECK') !== 'false',
     tolerateMalformedMdocValidity: env('MDOC_TOLERATE_MALFORMED_VALIDITY') === 'true',
     trust: {
       mode: (env('TRUST_MODE') ?? 'pinned') as TrustConfig['mode'],

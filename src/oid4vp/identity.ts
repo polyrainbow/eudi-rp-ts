@@ -32,6 +32,11 @@ export type VerifierIdentity = {
   requestTtlSeconds: number;
   /** Verify credential status lists. Leave true unless deliberately offline. */
   checkStatus: boolean;
+  /**
+   * Check the issuer's certificate chain against its CRL or OCSP responder.
+   * Fails closed, like `checkStatus`.
+   */
+  checkCertificateRevocation: boolean;
 };
 
 /**

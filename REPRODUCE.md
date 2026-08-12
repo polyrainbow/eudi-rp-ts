@@ -304,6 +304,84 @@ The current entry is republished as a history instance with an identical
 zero-length interval and drops the service. `ServiceInformation` is the status
 in effect by definition rather than by timestamp, and a test pins it.
 
+### Certificate revocation: what the reference PKI publishes, 2026-08-12
+
+Which of CRL and OCSP the EU reference infrastructure actually offers, checked
+by reading the extensions off the committed credential's own chain:
+
+```
+$ node -e "…read x5chain from test/fixtures/real/eudiw-pid-mdoc.txt…"
+--- CN=PID DS - 002
+   AIA: 1.3.6.1.5.5.7.48.2 https://preprod.pki.eudiw.dev/aia/PIDIssuerCA02-UT.cacert.pem
+   CRL: ["https://preprod.pki.eudiw.dev/crl/pid_CA_UT_02.crl"]
+--- CN=PID Issuer CA - UT 02
+   CRL: ["https://preprod.pki.eudiw.dev/crl/pid_CA_UT_02.crl"]
+```
+
+**Both certificates publish a CRL. Neither publishes an OCSP responder** — the
+only AIA access method present is `1.3.6.1.5.5.7.48.2`, which is `caIssuers`;
+`…48.1` (`ocsp`) is absent. So CRL is the only mechanism the real EU
+infrastructure offers today, and the only one that can be exercised against it.
+
+The CRL itself:
+
+```
+$ curl -sS -o pid.crl https://preprod.pki.eudiw.dev/crl/pid_CA_UT_02.crl
+HTTP 200  457 bytes  application/octet-stream
+
+$ openssl crl -inform DER -in pid.crl -noout -text
+    Signature Algorithm: ecdsa-with-SHA256
+    Issuer: CN=PID Issuer CA - UT 02, O=EUDI Wallet Reference Implementation, C=UT
+    Last Update: Aug 11 15:49:04 2026 GMT
+    Next Update: Aug 13 15:49:03 2026 GMT
+    X509v3 CRL Number: 484
+Revoked Certificates:
+    Serial Number: 44E8FD79564DA111A882289DC699E579BB6B1BEB
+        Revocation Date: Jun 26 12:08:17 2025 GMT
+```
+
+Small, ECDSA-signed, and genuinely maintained: CRL number 484, a two-day
+`nextUpdate`, and a real revocation in it. The end-to-end check against it —
+fetch, verify the signature against the CA, bound the freshness, look the serial
+up — returns `{"kind":"good","via":"crl"}` for the committed credential, and is
+run by `RUN_NETWORK_TESTS=1 npm test`.
+
+Note the two-day `nextUpdate`. Because this project refuses a CRL past it, a
+deployment pointed at this CA is dependent on the EU continuing to republish;
+that is the correct behaviour and worth knowing before turning the check on.
+
+### OCSP CertID against OpenSSL
+
+Since no reference responder exists, the OCSP path is exercised only against
+fixtures — and the fixtures are written by the same hand as the verifier, so on
+their own they prove the two agree rather than that either is right. The part
+where that matters most is the `CertID` (RFC 6960 §4.1.1), which identifies the
+certificate by SHA-1 hashes of the issuer's name and key rather than by value.
+
+`scripts/check-ocsp-certid.sh` builds a request with OpenSSL for the same
+certificate and compares, field by field, against the bytes our code puts on the
+wire:
+
+```
+$ npm run fixtures && ./scripts/check-ocsp-certid.sh
+  ok   hashAlgorithm   1.3.14.3.2.26
+  ok   issuerNameHash  80C9DD75F29B513D7FE6173F1BDB87D55DB8F71F
+  ok   issuerKeyHash   7D50546D787B3590949A059F7E55F86E6679BA14
+  ok   serialNumber    0A
+
+CertID matches OpenSSL.
+```
+
+The hashes differ on every run — the fixture CA is regenerated each time — so
+only the match means anything.
+
+One trap worth recording, because it cost a debugging round: **X.509 and OCSP
+carry an ECDSA signature as a DER `SEQUENCE`, while WebCrypto produces the raw
+r‖s pair.** This is the same encoding trap as XMLDSig in `lotl.ts`, pointing the
+other way. A fixture signed with WebCrypto's output directly is not what a real
+responder emits, and a verifier tuned to accept it would fail against every
+genuine one.
+
 ## 4. Full OID4VP round trip
 
 Against a local server:

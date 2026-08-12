@@ -24,6 +24,7 @@ const identity = {
   requestedVct: 'urn:eudi:pid:1',
   requestTtlSeconds: 300,
   checkStatus: false,
+  checkCertificateRevocation: false,
 };
 
 describe('x509_hash client identifier', () => {

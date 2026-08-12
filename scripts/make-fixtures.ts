@@ -245,6 +245,216 @@ async function issueMdoc(options: {
   return Buffer.from(encode(issuerSigned)).toString('base64url');
 }
 
+/** Where the revocable fixture certificate says to look. */
+const CRL_URL = 'https://ca.example/crl/issuer.crl';
+const OCSP_URL = 'https://ca.example/ocsp';
+
+/**
+ * An issuer certificate that publishes revocation information.
+ *
+ * The other fixture certificates deliberately carry neither extension, which is
+ * what makes them exercise the "nothing published, nothing to check" path. This
+ * one carries both, so the CRL and OCSP code has something to point at.
+ */
+async function makeRevocableIssuerCert(ca: Awaited<ReturnType<typeof makeCa>>, serial: string) {
+  const keys = await webcrypto.subtle.generateKey(ALG, true, ['sign', 'verify']);
+  const cert = await x509.X509CertificateGenerator.create({
+    serialNumber: serial,
+    subject: 'CN=eudi-rp-ts Revocable PID Issuer',
+    issuer: ca.cert.subject,
+    notBefore: new Date('2026-01-01T00:00:00Z'),
+    notAfter: new Date('2029-01-01T00:00:00Z'),
+    signingAlgorithm: SIGN,
+    publicKey: keys.publicKey as never,
+    signingKey: ca.keys.privateKey as never,
+    extensions: [
+      new x509.BasicConstraintsExtension(false, undefined, true),
+      new x509.CRLDistributionPointsExtension([CRL_URL]),
+      new x509.AuthorityInfoAccessExtension({ ocsp: [new x509.GeneralName('url', OCSP_URL)] }),
+    ],
+  });
+  return { keys, cert };
+}
+
+/**
+ * A CRL signed by the test CA.
+ *
+ * `nextUpdate` is not optional in practice: a CRL that never expires cannot be
+ * distinguished from one replayed from years ago, so the verifier refuses one
+ * without it — and a fixture exists for that case too.
+ */
+async function makeCrl(options: {
+  ca: Awaited<ReturnType<typeof makeCa>>;
+  revoked?: { serialNumber: string; reason: number }[];
+  thisUpdate?: Date;
+  nextUpdate?: Date | undefined;
+  signWith?: Awaited<ReturnType<typeof makeCa>>;
+}): Promise<string> {
+  const signer = options.signWith ?? options.ca;
+  const crl = await x509.X509CrlGenerator.create({
+    issuer: options.ca.cert.subject,
+    thisUpdate: options.thisUpdate ?? new Date('2026-05-01T00:00:00Z'),
+    ...(options.nextUpdate === undefined && 'nextUpdate' in options
+      ? {}
+      : { nextUpdate: options.nextUpdate ?? new Date('2026-07-01T00:00:00Z') }),
+    signingAlgorithm: SIGN,
+    signingKey: signer.keys.privateKey as never,
+    entries: (options.revoked ?? []).map((entry) => ({
+      serialNumber: entry.serialNumber,
+      revocationDate: new Date('2026-04-01T00:00:00Z'),
+      reason: entry.reason,
+    })),
+  } as never);
+  return Buffer.from(crl.rawData).toString('base64');
+}
+
+/**
+ * A signed OCSP response (RFC 6960).
+ *
+ * Hand-built, because nothing in the dependency tree produces one. The CertID
+ * is computed here from the certificate's own issuer field and the issuer's
+ * public key, per §4.1.1 — deliberately re-derived rather than borrowed from
+ * `src/`, so a mistake in the verifier's copy shows up as a mismatch instead of
+ * cancelling out. `scripts/check-ocsp-certid.sh` pins both against OpenSSL.
+ */
+async function makeOcspResponse(options: {
+  certificate: x509.X509Certificate;
+  ca: Awaited<ReturnType<typeof makeCa>>;
+  status: 'good' | 'revoked' | 'unknown';
+  /** Sign with this instead of the CA, to model a delegated responder. */
+  responder?: { keys: webcrypto.CryptoKeyPair; cert: x509.X509Certificate };
+  producedAt?: Date;
+  nextUpdate?: Date;
+  responseStatus?: number;
+}): Promise<string> {
+  const { AsnParser, AsnSerializer, OctetString } = await import('@peculiar/asn1-schema');
+  const asn1x509 = await import('@peculiar/asn1-x509');
+  const ocsp = await import('@peculiar/asn1-ocsp');
+  const { createHash } = await import('node:crypto');
+
+  const parsed = AsnParser.parse(options.certificate.rawData, asn1x509.Certificate);
+  const issuerName = AsnSerializer.serialize(parsed.tbsCertificate.issuer);
+  const spki = AsnParser.parse(
+    Buffer.from(await webcrypto.subtle.exportKey('spki', options.ca.keys.publicKey)),
+    asn1x509.SubjectPublicKeyInfo,
+  );
+
+  const serial = options.certificate.serialNumber;
+  const certID = new ocsp.CertID({
+    hashAlgorithm: new asn1x509.AlgorithmIdentifier({ algorithm: '1.3.14.3.2.26', parameters: null }),
+    issuerNameHash: new OctetString(createHash('sha1').update(Buffer.from(issuerName)).digest()),
+    issuerKeyHash: new OctetString(createHash('sha1').update(Buffer.from(spki.subjectPublicKey)).digest()),
+    serialNumber: new Uint8Array(Buffer.from(serial.length % 2 ? `0${serial}` : serial, 'hex')).buffer,
+  });
+
+  const certStatus = new ocsp.CertStatus(
+    options.status === 'good'
+      ? { good: null }
+      : options.status === 'unknown'
+        ? { unknown: null }
+        : {
+            revoked: new ocsp.RevokedInfo({
+              revocationTime: new Date('2026-04-01T00:00:00Z'),
+              // 1 is keyCompromise (RFC 5280 §5.3.1), the reason that matters
+              // most here: the issuer's key, not merely its paperwork.
+              revocationReason: new asn1x509.CRLReason(1),
+            }),
+          },
+  );
+
+  const signerKeys = options.responder?.keys ?? options.ca.keys;
+  const responderSpki = AsnParser.parse(
+    Buffer.from(await webcrypto.subtle.exportKey('spki', signerKeys.publicKey)),
+    asn1x509.SubjectPublicKeyInfo,
+  );
+
+  const tbsResponseData = new ocsp.ResponseData({
+    responderID: new ocsp.ResponderID({
+      byKey: new OctetString(createHash('sha1').update(Buffer.from(responderSpki.subjectPublicKey)).digest()),
+    }),
+    producedAt: options.producedAt ?? new Date('2026-05-01T00:00:00Z'),
+    responses: [
+      new ocsp.SingleResponse({
+        certID,
+        certStatus,
+        thisUpdate: new Date('2026-05-01T00:00:00Z'),
+        nextUpdate: options.nextUpdate ?? new Date('2026-07-01T00:00:00Z'),
+      }),
+    ],
+  });
+
+  const signed = AsnSerializer.serialize(tbsResponseData);
+  // WebCrypto emits the raw r‖s pair (IEEE P1363); X.509 and OCSP carry ECDSA
+  // as a DER SEQUENCE, the opposite of JWS and COSE. A real responder emits
+  // DER, so the fixture must too — otherwise it would only prove the verifier
+  // agrees with this script about the wrong encoding.
+  const signature = p1363ToDer(
+    new Uint8Array(await webcrypto.subtle.sign(SIGN, signerKeys.privateKey, signed)),
+  );
+
+  const basic = new ocsp.BasicOCSPResponse({
+    tbsResponseData,
+    signatureAlgorithm: new asn1x509.AlgorithmIdentifier({ algorithm: '1.2.840.10045.4.3.2' }),
+    signature: new ArrayBuffer(0),
+  });
+  basic.signature = signature;
+  if (options.responder) {
+    basic.certs = [AsnParser.parse(options.responder.cert.rawData, asn1x509.Certificate)];
+  }
+
+  const response = new ocsp.OCSPResponse({
+    responseStatus: options.responseStatus ?? 0,
+    ...(options.responseStatus
+      ? {}
+      : {
+          responseBytes: new ocsp.ResponseBytes({
+            responseType: ocsp.id_pkix_ocsp_basic,
+            response: new OctetString(AsnSerializer.serialize(basic)),
+          }),
+        }),
+  });
+
+  return Buffer.from(AsnSerializer.serialize(response)).toString('base64');
+}
+
+/** Raw r‖s to the DER SEQUENCE { r INTEGER, s INTEGER } that X.509 uses. */
+function p1363ToDer(raw: Uint8Array): ArrayBuffer {
+  const half = raw.length / 2;
+  const integer = (bytes: Uint8Array): number[] => {
+    let start = 0;
+    while (start < bytes.length - 1 && bytes[start] === 0) start += 1;
+    const trimmed = [...bytes.subarray(start)];
+    // DER INTEGER is signed, so a leading bit of 1 needs a zero byte in front.
+    if (trimmed[0]! & 0x80) trimmed.unshift(0);
+    return [0x02, trimmed.length, ...trimmed];
+  };
+
+  const body = [...integer(raw.subarray(0, half)), ...integer(raw.subarray(half))];
+  return Uint8Array.from([0x30, body.length, ...body]).buffer;
+}
+
+/** A delegated OCSP responder: signed by the CA, carrying id-kp-OCSPSigning. */
+async function makeOcspResponder(ca: Awaited<ReturnType<typeof makeCa>>, withEku: boolean) {
+  const keys = await webcrypto.subtle.generateKey(ALG, true, ['sign', 'verify']);
+  const cert = await x509.X509CertificateGenerator.create({
+    serialNumber: '09',
+    subject: `CN=eudi-rp-ts OCSP Responder${withEku ? '' : ' (no EKU)'}`,
+    issuer: ca.cert.subject,
+    notBefore: new Date('2026-01-01T00:00:00Z'),
+    notAfter: new Date('2029-01-01T00:00:00Z'),
+    signingAlgorithm: SIGN,
+    publicKey: keys.publicKey as never,
+    signingKey: ca.keys.privateKey as never,
+    extensions: [
+      new x509.BasicConstraintsExtension(false, undefined, true),
+      // 1.3.6.1.5.5.7.3.9 is id-kp-OCSPSigning: the CA saying this key may
+      // answer for its certificates. Without it any leaf could.
+      ...(withEku ? [new x509.ExtendedKeyUsageExtension(['1.3.6.1.5.5.7.3.9'])] : []),
+    ],
+  });
+  return { keys, cert };
+}
+
 const DISCLOSURE_FRAME_NO_AGE = {
   _sd: ['family_name', 'given_name', 'birthdate', 'issuing_authority'],
 } as const;
@@ -368,6 +578,25 @@ async function main() {
     present: onlyAge18,
   });
 
+  // A credential whose issuer certificate publishes both revocation mechanisms.
+  const revocable = await makeRevocableIssuerCert(ca, '0A');
+  const revocableSerial = revocable.cert.serialNumber;
+  const revocableCredential = await issueAndPresent({
+    signingKey: revocable.keys.privateKey,
+    header: {
+      x5c: [
+        Buffer.from(revocable.cert.rawData).toString('base64'),
+        Buffer.from(ca.cert.rawData).toString('base64'),
+      ],
+    },
+    payload: pidPayload(holderJwk, true),
+    frame: DISCLOSURE_FRAME,
+    present: onlyAge18,
+  });
+
+  const responder = await makeOcspResponder(ca, true);
+  const responderNoEku = await makeOcspResponder(ca, false);
+
   const device = await webcrypto.subtle.generateKey(ALG, true, ['sign', 'verify']);
   const deviceJwk = await webcrypto.subtle.exportKey('jwk', device.publicKey);
   const devicePrivateJwk = await webcrypto.subtle.exportKey('jwk', device.privateKey);
@@ -382,6 +611,19 @@ async function main() {
     deviceKey: deviceJwk,
     elements: mdocElements,
     status: { idx: MDOC_STATUS_INDEX, uri: MDOC_STATUS_URI },
+  });
+
+  // Signed by the certificate that publishes revocation information, so the
+  // mdoc path can be shown to check it exactly as the SD-JWT VC path does.
+  const mdocRevocableIssuer = await issueMdoc({
+    signingKey: revocable.keys.privateKey,
+    x5c: [
+      Buffer.from(revocable.cert.rawData).toString('base64'),
+      Buffer.from(ca.cert.rawData).toString('base64'),
+    ],
+    docType: mdocDocType,
+    deviceKey: deviceJwk,
+    elements: mdocElements,
   });
 
   const mdocWithoutStatus = await issueMdoc({
@@ -461,6 +703,61 @@ async function main() {
             ]),
           ),
         ),
+        /**
+         * Certificate revocation, which answers a different question from the
+         * status lists above: not "was this credential withdrawn" but "is the
+         * key that signed it still trusted to have signed anything".
+         */
+        certificateRevocation: {
+          crlUrl: CRL_URL,
+          ocspUrl: OCSP_URL,
+          issuerSerial: revocableSerial,
+          credential: revocableCredential.presented,
+          crls: {
+            good: await makeCrl({ ca }),
+            revoked: await makeCrl({
+              ca,
+              // 1 is keyCompromise, the reason that matters most here.
+              revoked: [{ serialNumber: revocableSerial, reason: 1 }],
+            }),
+            // Someone else's serial: proves the lookup matches rather than
+            // rejecting any CRL that has entries in it at all.
+            someoneElseRevoked: await makeCrl({ ca, revoked: [{ serialNumber: '99', reason: 1 }] }),
+            expired: await makeCrl({
+              ca,
+              thisUpdate: new Date('2026-01-01T00:00:00Z'),
+              nextUpdate: new Date('2026-02-01T00:00:00Z'),
+            }),
+            noNextUpdate: await makeCrl({ ca, nextUpdate: undefined }),
+            wrongSigner: await makeCrl({ ca, signWith: rogueCa }),
+          },
+          ocsp: {
+            good: await makeOcspResponse({ certificate: revocable.cert, ca, status: 'good' }),
+            revoked: await makeOcspResponse({ certificate: revocable.cert, ca, status: 'revoked' }),
+            unknown: await makeOcspResponse({ certificate: revocable.cert, ca, status: 'unknown' }),
+            expired: await makeOcspResponse({
+              certificate: revocable.cert,
+              ca,
+              status: 'good',
+              nextUpdate: new Date('2026-02-01T00:00:00Z'),
+            }),
+            /** responseStatus 3 is tryLater: the responder declining to answer. */
+            tryLater: await makeOcspResponse({ certificate: revocable.cert, ca, status: 'good', responseStatus: 3 }),
+            delegated: await makeOcspResponse({ certificate: revocable.cert, ca, status: 'good', responder }),
+            delegatedRevoked: await makeOcspResponse({
+              certificate: revocable.cert,
+              ca,
+              status: 'revoked',
+              responder,
+            }),
+            delegatedWithoutEku: await makeOcspResponse({
+              certificate: revocable.cert,
+              ca,
+              status: 'good',
+              responder: responderNoEku,
+            }),
+          },
+        },
         mdoc: {
           docType: mdocDocType,
           statusIndex: MDOC_STATUS_INDEX,
@@ -468,6 +765,7 @@ async function main() {
           devicePrivateJwk,
           withStatus: mdocWithStatus,
           withoutStatus: mdocWithoutStatus,
+          revocableIssuer: mdocRevocableIssuer,
           statusLists: {
             valid: await statusListJwt(issuer.keys.privateKey, x5c(issuer.cert), undefined, {
               sub: MDOC_STATUS_URI,

@@ -7,20 +7,24 @@ about where it stops. Before relying on it for anything real, read
 "Spec-compliant vs simplified" there. The gaps that matter most:
 
 - **Certificate path validation is partial.** Signature linkage, validity
-  windows, path length, an optional EKU allowlist and RFC 5280 Name Constraints
-  are checked; KeyUsage bits and certificate policies are not. No CRL or OCSP
-  for the issuer chain.
+  windows, path length, an optional EKU allowlist, RFC 5280 Name Constraints and
+  revocation by CRL or OCSP are checked; KeyUsage bits and certificate policies
+  are not.
 - **Trust list processing is not full ETSI TS 119 615.** Service status history
   and validity-time evaluation are implemented; qualifier processing, `Sie`
   extensions and the list's own issue date are not.
 - **Sessions are in memory**, so a restart drops them and more than one
   instance breaks them.
 
-Credential revocation via Token Status List **is** checked, for SD-JWT VC and
-mdoc alike, and fails closed. The one revocation mechanism not implemented is
-the `identifier_list` the EU reference issuer publishes alongside its status
-list; a credential offering *only* that is rejected rather than accepted
-unchecked.
+Revocation **is** checked, at both levels and failing closed at both: the
+credential, via Token Status List for SD-JWT VC and mdoc alike; and the issuer's
+certificate chain, via CRL or OCSP. A certificate that publishes neither a CRL
+distribution point nor a responder is accepted — that is the one case where
+there is genuinely nothing to check.
+
+The one revocation mechanism not implemented is the `identifier_list` the EU
+reference issuer publishes alongside its status list; a credential offering
+*only* that is rejected rather than accepted unchecked.
 
 ## Test key material is committed on purpose
 

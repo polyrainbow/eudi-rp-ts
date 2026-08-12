@@ -75,16 +75,28 @@ failure mode means adding or reusing a code, not a new error string.
   `src/trust/lotl.ts` implements it.
 - Status list fetching *and* verifying the list's own signature are the relying party's job.
   `src/trust/status.ts` chains it to the same anchors and **fails closed**.
+- Nothing in the tree does CRL or OCSP. `src/trust/revocation.ts` implements both on
+  `@peculiar/asn1-x509` and `@peculiar/asn1-ocsp` for the structures, `node:crypto` for the
+  signatures. Note X.509 carries ECDSA as a **DER** sequence, the opposite of the raw r‖s that JWS
+  and COSE use — the same trap as XMLDSig in `lotl.ts`, in the other direction.
 
 ### Deliberate simplifications
 
 The gaps listed under "Spec-compliant vs simplified" in the README and in `SECURITY.md` are
-decisions, not oversights: no CRL/OCSP, partial path validation (Node exposes EKU but not the
-KeyUsage bit string; Name Constraints *are* enforced, via `@peculiar/asn1-x509` for the DER —
-crypto stays on `node:crypto`), trust lists not fully TS 119 615 (service status history and
-validity-time evaluation *are* implemented; qualifiers and `Sie` extensions are not), in-memory
-sessions in the demo, ES256 only.
+decisions, not oversights: partial path validation (Node exposes EKU but not the KeyUsage bit
+string; Name Constraints *are* enforced, via `@peculiar/asn1-x509` for the DER — crypto stays on
+`node:crypto`), trust lists not fully TS 119 615 (service status history and validity-time
+evaluation *are* implemented; qualifiers and `Sie` extensions are not), in-memory sessions in the
+demo, ES256 only.
+
 Don't quietly close one; if a change touches these, update the README section too.
+
+Revocation is checked at two independent levels, and conflating them is a mistake worth naming:
+`src/trust/status.ts` is Token Status List over the *credential*; `src/trust/revocation.ts` is CRL
+and OCSP over the *issuer's certificates*. Both are on by default and fail closed. Certificate
+revocation is a separate async step rather than part of path validation because
+`resolveIssuerCertificateChain` must stay synchronous — `@sd-jwt`'s `statusVerifier` callback has
+nowhere to await, so the check runs against the chain that call returned.
 
 Interop workarounds are named as workarounds and default to strict —
 `tolerateMalformedMdocValidity` exists because the EU reference issuer emits a `validUntil` that is

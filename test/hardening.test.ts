@@ -19,6 +19,7 @@ const base = {
   expectedVct: 'urn:eudi:pid:1',
   keyBinding: { nonce: fixtures.nonce as string, audience: fixtures.audience as string },
   checkStatus: false,
+  checkCertificateRevocation: false,
   now: NOW,
 };
 

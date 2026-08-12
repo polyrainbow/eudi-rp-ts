@@ -41,9 +41,22 @@ export type ReasonCode =
   | 'WALLET_ERROR'
   // Trust list retrieval (Phase 2)
   | 'TRUST_LIST_UNAVAILABLE'
-  // Revocation
+  // Revocation of the credential, via Token Status List
   | 'CREDENTIAL_REVOKED'
-  | 'STATUS_UNAVAILABLE';
+  | 'STATUS_UNAVAILABLE'
+  /**
+   * A certificate in the issuer's chain has been revoked by its CA, via CRL or
+   * OCSP. Distinct from `CREDENTIAL_REVOKED`: that is one credential withdrawn
+   * by an issuer in good standing, this is the issuer's own key no longer being
+   * trusted to have issued any of them.
+   */
+  | 'ISSUER_CERTIFICATE_REVOKED'
+  /**
+   * The issuer's chain publishes a CRL or an OCSP responder that could not be
+   * fetched, verified, or read. Distinct from `STATUS_UNAVAILABLE`, which is
+   * the credential's own status list.
+   */
+  | 'ISSUER_REVOCATION_UNAVAILABLE';
 
 export type Rejected = {
   verified: false;

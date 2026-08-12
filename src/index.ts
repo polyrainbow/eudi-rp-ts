@@ -40,6 +40,16 @@ export type { Pointer, TrustListOptions, TrustListResult } from './trust/lotl.ts
 export { resolveIssuerCertificateChain, resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
 export type { PathValidationOptions, ResolvedIssuer } from './trust/issuer-key.ts';
 export { checkStatusList, createStatusChecker, createStatusListCache } from './trust/status.ts';
+// Certificate revocation: CRL and OCSP, a different question from the above.
+export {
+  checkChainRevocation,
+  createRevocationCache,
+  readCrlDistributionPoints,
+  readOcspResponders,
+  revocationRejection,
+  revocationVia,
+} from './trust/revocation.ts';
+export type { RevocationCheckOptions, RevocationOutcome } from './trust/revocation.ts';
 export type {
   StatusCheckOptions,
   StatusChecker,
@@ -56,6 +66,7 @@ export {
   DEFAULT_MAX_REDIRECTS,
   DEFAULT_TIMEOUT_MS,
   TtlCache,
+  fetchBytes,
   fetchText,
 } from './fetching.ts';
 export type { CacheOptions, FetchOptions } from './fetching.ts';

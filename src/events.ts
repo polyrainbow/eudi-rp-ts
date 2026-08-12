@@ -15,6 +15,15 @@ export type VerificationEvent =
   | { type: 'verification.started'; vct: string | undefined }
   | { type: 'issuer.resolved'; subject: string; chainLength: number }
   | { type: 'status.checked'; outcome: 'valid' | 'revoked' | 'unavailable'; cached: boolean }
+  /**
+   * Revocation of the issuer's certificate chain, which is a different question
+   * from `status.checked`. `via` is undefined when no mechanism answered.
+   */
+  | {
+      type: 'issuer.revocation.checked';
+      outcome: 'good' | 'revoked' | 'unavailable' | 'no-mechanism' | 'not-checked';
+      via: 'crl' | 'ocsp' | undefined;
+    }
   | { type: 'verification.accepted'; vct: string; evidence?: string; durationMs: number }
   | { type: 'verification.rejected'; reason: string; durationMs: number };
 
