@@ -4,7 +4,7 @@ import { SignedXml } from 'xml-crypto';
 import type { SignatureAlgorithm } from 'xml-crypto';
 import xpath from 'xpath';
 import { DEFAULT_TIMEOUT_MS, fetchText as fetchWithTimeout } from '../fetching.ts';
-import { TrustAnchors } from './anchors.ts';
+import { TrustAnchors, type TrustServiceEntry } from './anchors.ts';
 
 /**
  * ETSI TS 119 612 trust list client.
@@ -19,13 +19,15 @@ import { TrustAnchors } from './anchors.ts';
  *       TSLLocation                                   <- where the national list lives
  *       AdditionalInformation/…/{TSLType,SchemeTerritory}
  *     TrustServiceProviderList/…/TSPService
- *       ServiceInformation/{ServiceTypeIdentifier,ServiceStatus}
- *       ServiceDigitalIdentity/DigitalId/X509Certificate
+ *       ServiceInformation/{ServiceTypeIdentifier,ServiceStatus,StatusStartingTime}
+ *         ServiceDigitalIdentity/DigitalId/X509Certificate
+ *       ServiceHistory/ServiceHistoryInstance/{…the same, as it was before…}
  *
- * SIMPLIFIED — see README. We check the XML signature and that each service is
- * `granted`. We do NOT implement the full TS 119 615 algorithm: no service
- * status history, no validity-time evaluation against the credential date, no
- * qualifier processing, no `Sie` service information extensions.
+ * SIMPLIFIED — see README. We check the XML signature, and evaluate each
+ * service's status *at a given instant* against its declared starting time and
+ * status history. We do NOT implement the rest of the TS 119 615 algorithm: no
+ * qualifier processing, no `Sie` service information extensions, and no use of
+ * the list's own issue date or next-update.
  */
 
 const TSL_NS = 'http://uri.etsi.org/02231/v2#';
@@ -175,7 +177,7 @@ export async function fetchTrustAnchors(
     ? pointers.filter((p) => options.territories!.includes(p.territory))
     : pointers;
 
-  const certificates: X509Certificate[] = [];
+  const services: TrustServiceEntry[] = [];
   const sources: TrustListResult['sources'] = [];
   const failures: TrustListResult['failures'] = [];
 
@@ -189,22 +191,22 @@ export async function fetchTrustAnchors(
         skip: config.insecureSkipSignatureCheck,
         label: pointer.url,
       });
-      const services = parseServiceCertificates(xml, config.serviceTypes);
-      certificates.push(...services);
-      sources.push({ territory: pointer.territory, url: pointer.url, services: services.length });
+      const parsed = parseTrustServices(xml, config.serviceTypes);
+      services.push(...parsed);
+      sources.push({ territory: pointer.territory, url: pointer.url, services: parsed.length });
     } catch (error) {
       failures.push({ url: pointer.url, error: error instanceof Error ? error.message : String(error) });
     }
   }
 
-  if (certificates.length === 0) {
+  if (services.length === 0) {
     throw new Error(
       `No trust anchors found in ${config.lotlUrl} (${failures.length} list(s) failed). ` +
         'Check LOTL_SERVICE_TYPES and LOTL_TERRITORIES.',
     );
   }
 
-  return { anchors: TrustAnchors.fromCertificates(certificates), sources, failures };
+  return { anchors: TrustAnchors.fromTrustServices(services), sources, failures };
 }
 
 /** Verify a trust list's enveloped XML signature. */
@@ -257,27 +259,127 @@ export function parsePointers(xml: string): Pointer[] {
   }));
 }
 
-/** Certificates of every `granted` service whose type passes the filter. */
-export function parseServiceCertificates(xml: string, serviceTypes: string[]): X509Certificate[] {
+/**
+ * Every service certificate, with the periods it was granted for.
+ *
+ * A `TSPService` carries its current status in `ServiceInformation` and, for
+ * two thirds of the services actually published, the statuses that preceded it
+ * in `ServiceHistory/ServiceHistoryInstance`. Each of those entries has its own
+ * status, its own starting time, and its own digital identity.
+ *
+ * The entries are read separately rather than flattened, for two reasons.
+ *
+ * A status only applies from its `StatusStartingTime`, so "granted" is a period
+ * rather than a fact — 223 of the services on eight member states' lists became
+ * granted during 2026 alone, and none of them vouches for anything signed
+ * before that. Sorting the entries turns each one into a half-open interval
+ * ending where the next begins.
+ *
+ * And a certificate belongs to the entry that names it. Scoping the search to
+ * the whole `TSPService`, as this once did, harvests the digital identities of
+ * *superseded* entries as though they were current — a certificate retired in
+ * 2019 would be loaded as a present-day anchor purely because the service that
+ * replaced it is granted today.
+ */
+export function parseTrustServices(xml: string, serviceTypes: string[]): TrustServiceEntry[] {
   const doc = new DOMParser().parseFromString(xml, 'text/xml');
   const services = select('//tsl:TSPService', doc as unknown as Node) as Node[];
-  const certificates: X509Certificate[] = [];
+  const entries: TrustServiceEntry[] = [];
 
   for (const service of services) {
-    if (text(first(select('.//tsl:ServiceStatus', service))) !== STATUS_GRANTED) continue;
+    // Deliberately not `.//`: the current status lives in ServiceInformation,
+    // and a descendant search would also match every history instance.
+    const current = readEntry(first(select('./tsl:ServiceInformation', service)));
+    const history = (select('./tsl:ServiceHistory/tsl:ServiceHistoryInstance', service) as Node[])
+      .map(readEntry)
+      .filter((entry): entry is ParsedEntry => entry !== undefined)
+      // Ascending, so each entry runs until the next one starts. The document
+      // lists history newest-first, which would otherwise invert every interval.
+      .sort((a, b) => a.startingTime.getTime() - b.startingTime.getTime());
 
-    const type = text(first(select('.//tsl:ServiceTypeIdentifier', service)));
-    if (serviceTypes.length > 0 && !serviceTypes.includes(type)) continue;
+    // ServiceInformation is the status in effect, by definition, so it runs to
+    // infinity whatever the history says. It is deliberately not sorted in
+    // among the historical entries: Poland republishes the current entry as a
+    // history instance carrying the *same* StatusStartingTime, which ordering
+    // alone would turn into a zero-length interval and silently drop the
+    // service. Timestamps in a status history are data, not a source of truth
+    // about which entry is current.
+    const timeline: { entry: ParsedEntry; until: Date | undefined }[] = history.map((entry, index) => ({
+      entry,
+      until: history[index + 1]?.startingTime ?? current?.startingTime,
+    }));
+    if (current) timeline.push({ entry: current, until: undefined });
 
-    for (const node of select('.//tsl:X509Certificate', service) as Node[]) {
-      try {
-        certificates.push(new X509Certificate(toPem(text(node))));
-      } catch {
-        // A single unparseable entry must not discard the rest of the list.
+    for (const { entry, until } of timeline) {
+      if (entry.status !== STATUS_GRANTED) continue;
+      if (serviceTypes.length > 0 && !serviceTypes.includes(entry.type)) continue;
+      // An interval that ends before it begins covers nothing. That means the
+      // list contradicts itself — a superseded entry dated at or after the one
+      // that replaced it — so the safe reading is that it grants nothing.
+      if (until !== undefined && until <= entry.startingTime) continue;
+
+      const granted = [{ from: entry.startingTime, until }];
+      for (const certificate of entry.certificates) {
+        entries.push({ certificate, granted });
       }
     }
   }
-  return certificates;
+
+  return entries;
+}
+
+type ParsedEntry = {
+  status: string;
+  type: string;
+  startingTime: Date;
+  certificates: X509Certificate[];
+};
+
+/**
+ * One `ServiceInformation` or `ServiceHistoryInstance`.
+ *
+ * An entry with no readable `StatusStartingTime` is dropped rather than assumed
+ * to have applied forever: it is the only thing that says when the status began,
+ * and inventing one would make up the answer to the question being asked. ETSI
+ * requires the element, and across 2797 services on eight member states' lists —
+ * plus 3330 history instances — every single one carries it, so nothing real is
+ * lost by insisting. See REPRODUCE.md.
+ */
+function readEntry(node: Node | undefined): ParsedEntry | undefined {
+  if (!node) return undefined;
+  const startingTime = new Date(text(first(select('./tsl:StatusStartingTime', node))));
+  if (Number.isNaN(startingTime.getTime())) return undefined;
+
+  const certificates: X509Certificate[] = [];
+  for (const certificate of select('.//tsl:X509Certificate', node) as Node[]) {
+    try {
+      certificates.push(new X509Certificate(toPem(text(certificate))));
+    } catch {
+      // A single unparseable entry must not discard the rest of the list.
+    }
+  }
+
+  return {
+    status: text(first(select('./tsl:ServiceStatus', node))),
+    type: text(first(select('./tsl:ServiceTypeIdentifier', node))),
+    startingTime,
+    certificates,
+  };
+}
+
+/**
+ * Certificates of every service granted *now*.
+ *
+ * The historical view is `parseTrustServices`; this is the answer to the
+ * narrower question, kept because it is the one most callers have.
+ */
+export function parseServiceCertificates(xml: string, serviceTypes: string[]): X509Certificate[] {
+  const now = new Date();
+  return parseTrustServices(xml, serviceTypes)
+    .filter((entry) =>
+      entry.granted.some(({ from, until }) => now >= from && (until === undefined || now < until)),
+    )
+    .map((entry) => entry.certificate);
 }
 
 /**

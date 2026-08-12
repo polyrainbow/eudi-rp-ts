@@ -250,6 +250,60 @@ exactly why http is now allowed for one. By that reasoning an unverifiable TLS
 chain is no worse than plain http. It is left open because "ignore TLS errors"
 is a much larger hammer than "allow a scheme", and worth deciding deliberately.
 
+### Service status history and validity time, 2026-08-12
+
+Whether evaluating status against an instant costs anchors, and what the
+published lists actually contain. Both were measured before the parser changed,
+so the comparison is against the flat parse it replaced.
+
+```
+old parser: 2434 certs, 2301 unique
+new parser: 2433 granted-now entries, 2301 unique
+unique certs the old parser had and the new one does not: 0
+services granted-now with no StatusStartingTime: 0
+history-only certificates under a granted service: 0
+earliest granted starting times: 2016-06-30 (×5)
+```
+
+Three things follow, and the first is the one worth stating plainly.
+
+**The anchor set is unchanged.** 2301 unique certificates before and after. The
+familiar figure of 2434 was never a count of distinct anchors — it counted a
+certificate once per service naming it, and 133 of those were repeats. Nothing
+was lost by moving to intervals, and nothing was gained at the default
+evaluation time either. What was gained is that another time can be asked about:
+
+```
+granted right now:  2287        # of 2305 certificates across all periods
+granted 2020-01-01:  748
+granted 2015-01-01:    0        # the lists begin 2016-06-30
+```
+
+**`StatusStartingTime` is universal.** Across 2797 services and 3330 history
+instances on eight member states' lists, every entry carries one — so requiring
+it, and dropping entries without one rather than inventing a start, costs
+nothing today. Same measured argument as Name Constraints above.
+
+**Sixteen services carry a starting time in the future**, all of them
+`withdrawn` (FR: Certinomis and the Ministère de l'Intérieur timestamping
+services, dated 2027–2029). None is `granted`, so excluding not-yet-effective
+grants changes nothing today either — but the case is live in the data.
+
+The one real trap was Poland, and it does not appear in any count above because
+it was found by reconciling the 14 certificates that went missing on the first
+attempt:
+
+```
+$ node -e "…parse https://www.nccert.pl/tsl/PL_TSL.xml…"
+ServiceInformation: granted 2017-02-13T10:38:44Z
+   history instance: granted 2017-02-13T10:38:44Z
+```
+
+The current entry is republished as a history instance with an identical
+`StatusStartingTime`. Ordering entries by time alone gives the live one a
+zero-length interval and drops the service. `ServiceInformation` is the status
+in effect by definition rather than by timestamp, and a test pins it.
+
 ## 4. Full OID4VP round trip
 
 Against a local server:

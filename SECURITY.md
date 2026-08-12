@@ -10,8 +10,9 @@ about where it stops. Before relying on it for anything real, read
   windows, path length, an optional EKU allowlist and RFC 5280 Name Constraints
   are checked; KeyUsage bits and certificate policies are not. No CRL or OCSP
   for the issuer chain.
-- **Trust list processing is not full ETSI TS 119 615.** No service status
-  history, no validity-time evaluation, no qualifier processing.
+- **Trust list processing is not full ETSI TS 119 615.** Service status history
+  and validity-time evaluation are implemented; qualifier processing, `Sie`
+  extensions and the list's own issue date are not.
 - **Sessions are in memory**, so a restart drops them and more than one
   instance breaks them.
 

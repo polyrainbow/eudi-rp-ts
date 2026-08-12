@@ -81,8 +81,9 @@ failure mode means adding or reusing a code, not a new error string.
 The gaps listed under "Spec-compliant vs simplified" in the README and in `SECURITY.md` are
 decisions, not oversights: no CRL/OCSP, partial path validation (Node exposes EKU but not the
 KeyUsage bit string; Name Constraints *are* enforced, via `@peculiar/asn1-x509` for the DER —
-crypto stays on `node:crypto`), trust lists not fully TS 119 615, in-memory sessions in the demo,
-ES256 only.
+crypto stays on `node:crypto`), trust lists not fully TS 119 615 (service status history and
+validity-time evaluation *are* implemented; qualifiers and `Sie` extensions are not), in-memory
+sessions in the demo, ES256 only.
 Don't quietly close one; if a change touches these, update the README section too.
 
 Interop workarounds are named as workarounds and default to strict —

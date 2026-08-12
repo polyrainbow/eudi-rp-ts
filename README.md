@@ -202,9 +202,10 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 - **No CRL or OCSP for issuer certificates.** Credential revocation is checked
   via Token Status List; certificate revocation relies on the issuer leaving the
   trusted list, which the refresh picks up. That is weaker, and worth knowing.
-- **Trust lists are not fully TS 119 615.** We check the signature and that a
-  service is `granted`. No service status history, no validity-time evaluation
-  against the credential date, no qualifier processing, no `Sie` extensions.
+- **Trust lists are not fully TS 119 615.** Service status history and
+  validity-time evaluation *are* implemented (see below). Not implemented: no
+  qualifier processing, no `Sie` extensions, and no use of the list's own issue
+  date or next-update.
 - **Sessions are in memory** in the demo app. Restarting drops them, and more
   than one instance breaks them. The library holds no state.
 - **ES256 only**, matching what the reference issuer advertises.
@@ -239,6 +240,44 @@ Two deliberate positions:
 Measured against the live eIDAS trust lists on 2026-08-11: 2 of 1897 anchors
 carry the extension, using only `dNSName` and `iPAddress`. So failing closed on
 an unimplemented form costs nothing today — see REPRODUCE.md.
+
+### Trust list validity time
+
+A service on a trusted list is `granted` **from a stated instant**, not forever,
+and usually has a `ServiceHistory` recording what it was before. So "is this
+certificate a trust anchor" is a question about a time, and `TrustAnchors`
+answers it that way: each anchor from a trust list carries the half-open
+intervals it was granted for, and path validation looks it up against an instant.
+
+That instant defaults to the validation time. For a credential being presented
+live this is the safer reading — a service withdrawn since issuance stops
+vouching for anything, including what it signed while granted. Pass
+`pathValidation.trustListEvaluationTime` for the other reading, the one eIDAS
+uses for long-term signatures, where withdrawal is not retroactive and what
+matters is that the service was granted *when it signed*. That reading also
+rejects the case the default accepts: a service granted only **after** the
+credential was signed. Pinned anchors from a PEM file are unaffected — an
+operator's decision has no published status to evaluate.
+
+Measured against the live lists on 2026-08-12, and this is the honest summary:
+at the default evaluation time the anchor set is **unchanged** — 2301 unique
+certificates before and after. The previous flat parse reported 2434 because it
+counted a certificate once per service that names it; 133 of those were
+duplicates. What changes is that the question can now be asked at another time:
+223 of the services on eight member states' lists became granted during 2026
+alone, and none of them vouches for anything signed earlier.
+
+Two details the real lists forced:
+
+- **`StatusStartingTime` is required.** It is the only thing saying when a
+  status began, so an entry without one is dropped rather than assumed to have
+  applied forever. All 2797 services and 3330 history instances sampled carry
+  it, so nothing real is lost — the same measured argument as Name Constraints.
+- **`ServiceInformation` is current by definition, not by timestamp.** Poland
+  republishes the current entry as a history instance with the *same*
+  `StatusStartingTime`; ordering the two by time gives the live entry a
+  zero-length interval and drops the service. That cost 14 real anchors before
+  it was pinned by a test.
 
 ## mdoc
 

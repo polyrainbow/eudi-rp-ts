@@ -28,7 +28,14 @@ export type { AgeEvidence } from './predicate/age.ts';
 
 // Trust anchors: pinned, or from an ETSI TS 119 612 trust list.
 export { TrustAnchors } from './trust/anchors.ts';
-export { fetchTrustAnchors, parsePointers, parseServiceCertificates, verifyTrustList } from './trust/lotl.ts';
+export type { GrantedInterval, TrustServiceEntry } from './trust/anchors.ts';
+export {
+  fetchTrustAnchors,
+  parsePointers,
+  parseServiceCertificates,
+  parseTrustServices,
+  verifyTrustList,
+} from './trust/lotl.ts';
 export type { Pointer, TrustListOptions, TrustListResult } from './trust/lotl.ts';
 export { resolveIssuerCertificateChain, resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
 export type { PathValidationOptions, ResolvedIssuer } from './trust/issuer-key.ts';

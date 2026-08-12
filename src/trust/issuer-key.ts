@@ -47,6 +47,23 @@ export type PathValidationOptions = {
   requiredExtendedKeyUsage?: string[];
   /** Reject chains longer than this, anchor excluded. */
   maxChainLength?: number;
+  /**
+   * The instant to evaluate trust list status at. Defaults to `now`.
+   *
+   * A service's entry on a trusted list is granted from a stated time, not
+   * forever, so "is this anchor trusted" is only answerable against an instant.
+   * The default is the validation time, which is the safest reading for a
+   * credential being presented live: a service withdrawn since issuance stops
+   * vouching for anything, including credentials it signed while granted.
+   *
+   * Pass the credential's signing time instead for the other reading, the one
+   * eIDAS uses for long-term signatures, where a withdrawal is not retroactive
+   * and what matters is that the service was granted when it signed. That
+   * reading also rejects the converse case the default accepts: a service
+   * granted *after* the credential was signed. Only anchors from a trust list
+   * are affected — pinned anchors carry no status to evaluate.
+   */
+  trustListEvaluationTime?: Date;
 };
 
 export function resolveIssuerKeyFromX5c(
@@ -123,16 +140,28 @@ export function resolveIssuerCertificateChain(
 
   // The chain must terminate at an anchor: either the top certificate IS an
   // anchor, or an anchor signed it. An anchor that signs must itself be a CA.
+  //
+  // "Is an anchor" is a question about an instant, not a standing fact: a trust
+  // list grants a service from a stated time and can withdraw it later, so the
+  // lookup is made against `evaluationTime`.
+  const evaluationTime = options.trustListEvaluationTime ?? now;
   const top = chain.at(-1)!;
-  const equalAnchor = anchors.findEqual(top);
-  const signingAnchor = equalAnchor ?? anchors.findIssuerOf(top);
+  const equalAnchor = anchors.findEqual(top, evaluationTime);
+  const signingAnchor = equalAnchor ?? anchors.findIssuerOf(top, evaluationTime);
   if (!equalAnchor && signingAnchor && !signingAnchor.ca) {
     return reject('ISSUER_UNTRUSTED', `Trust anchor is not a CA: ${signingAnchor.subject}`);
   }
   if (!signingAnchor) {
+    // Distinguish "not on any list" from "on a list, but not at this instant":
+    // the second is a service whose grant had not started or had ended, and
+    // reporting it as an unknown issuer would send an operator looking for the
+    // wrong thing.
+    const knownAtAnotherTime = anchors.findEqual(top) ?? anchors.findIssuerOf(top);
     return reject(
       'ISSUER_UNTRUSTED',
-      `x5c chain does not terminate at a trust anchor: ${top.subject}`,
+      knownAtAnotherTime
+        ? `x5c chain terminates at ${top.subject}, which was not a granted trust service at ${evaluationTime.toISOString()}`
+        : `x5c chain does not terminate at a trust anchor: ${top.subject}`,
     );
   }
 
