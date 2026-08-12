@@ -572,6 +572,15 @@ Every claim below is reproducible, and [REPRODUCE.md](REPRODUCE.md) says exactly
 how — with the dates, versions, endpoints and configuration that produced it,
 and an explicit list of what was *not* done.
 
+Several of those claims are *measurements* rather than reasoning — "failing
+closed on an unimplemented Name Constraint form costs nothing", "requiring
+`StatusStartingTime` loses nothing" — and a measurement goes stale silently.
+`test/ecosystem-drift.test.ts` re-checks them against the live deployment every
+week, and fails with what changed and what to update. A failure there means
+nothing in `src/` is broken and the EU has moved: a rotated CA, a stale CRL, an
+OCSP responder appearing. Some of those would be good news, and a red build is
+still the only way to hear it.
+
 
 - **A genuine EUDI credential verifies.** `test/real-credential.test.ts` runs
   the full credential path — `x5c` resolution, chain to the real

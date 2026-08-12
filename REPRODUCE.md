@@ -382,6 +382,54 @@ other way. A fixture signed with WebCrypto's output directly is not what a real
 responder emits, and a verifier tuned to accept it would fail against every
 genuine one.
 
+### Keeping this document honest
+
+Everything above is a measurement, and a measurement goes stale silently. Two
+decisions in this project rest on one — "failing closed on an unimplemented name
+form costs nothing" and "requiring `StatusStartingTime` loses nothing" — and
+both are true today rather than true by construction.
+
+`test/ecosystem-drift.test.ts` asserts the claims here against the live
+deployment, weekly, in `.github/workflows/network.yml`. It is deliberately
+separate from the other network tests: those ask *does our code still work*, and
+a failure is a bug; this asks *is REPRODUCE.md still true*, and a failure means
+nothing in `src/` is broken and the EU has moved. Each assertion fails with what
+changed and what to update, because a scheduled job that merely warns is a job
+nobody reads. Some of the failures would be good news — an OCSP responder
+appearing, `/.well-known/jwt-vc-issuer` starting to answer — and a red build is
+still the only way to find out.
+
+It watches: the PID Issuer CA still being the certificate committed in
+`anchors/`; the CRL still published and still inside its `nextUpdate`; no OCSP
+responder appearing; `/.well-known/jwt-vc-issuer` still refusing; and, across
+every national list, that no Name Constraint uses a form we do not implement,
+that no granted service omits `StatusStartingTime`, and that the anchor count
+has not collapsed.
+
+Run on 2026-08-12:
+
+```
+$ RUN_NETWORK_TESTS=1 node --test test/ecosystem-drift.test.ts
+✔ still uses the CA certificate committed in anchors/
+✔ still publishes a CRL, and it is still fresh
+✔ still runs no OCSP responder
+✔ still does not support /.well-known/jwt-vc-issuer
+✔ still support every assumption the trust code makes
+  ℹ 2361 granted services across 29 lists; 52 identify themselves without a
+    certificate; 2439 service entries yielded a certificate; unreachable: IE, PT
+```
+
+**52 granted services publish no certificate at all.** Their
+`ServiceDigitalIdentity` carries `X509SubjectName` and `X509SKI` instead —
+Liechtenstein and the United Kingdom are the two lists that do this. TS 119 612
+permits it, and it means those services can never be trust anchors here: this
+implementation holds anchor certificates and matches them by fingerprint, so a
+service that names a subject and a key identifier without supplying the key
+gives it nothing to hold. A fuller implementation would match a *presented*
+chain against the name and SKI rather than needing the certificate up front.
+That is a real gap, reported by the drift test as a diagnostic rather than a
+failure because it is a property of the lists rather than a change in them.
+
 ## 4. Full OID4VP round trip
 
 Against a local server:

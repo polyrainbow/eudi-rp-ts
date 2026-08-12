@@ -1,9 +1,16 @@
 name: Live EU infrastructure
 
-# The offline suite proves the verification logic. This one proves the claims in
-# REPRODUCE.md still hold against systems nobody here controls: that the EU List
-# of Trusted Lists still verifies, and that the reference issuer's status list is
-# still reachable and signed by an anchor we trust.
+# The offline suite proves the verification logic. This one runs against systems
+# nobody here controls, and it does two different jobs:
+#
+#   - Does our code still work against live infrastructure — the LOTL still
+#     verifies, the reference issuer's status list and CRL are still reachable
+#     and signed by anchors we trust. A failure is a bug.
+#   - Is REPRODUCE.md still true — test/ecosystem-drift.test.ts. A failure means
+#     nothing in src/ is broken and the EU deployment has moved: a rotated CA, a
+#     stale CRL, an OCSP responder appearing, a Name Constraint in a form we do
+#     not implement. Several decisions rest on measurements that would otherwise
+#     go stale silently.
 #
 # It runs on a schedule rather than on every push for two reasons. A failure here
 # is news about the EU deployment, not about the commit that triggered it — and
