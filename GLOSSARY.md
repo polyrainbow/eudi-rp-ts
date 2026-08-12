@@ -136,6 +136,80 @@ credential has different values for each.
 
 ---
 
+## Encodings and signature containers
+
+The two credential formats do the same cryptography in two encodings, and most
+of the vocabulary above is really one of these two stacks. JSON and JOSE for
+SD-JWT VC; CBOR and COSE for mdoc.
+
+**JOSE** — JSON Object Signing and Encryption. The RFC family the JSON side is
+built from: **JWS** (7515), **JWE** (7516), **JWK** (7517), **JWA** (7518, the
+algorithm names) and **JWT** (7519). **(used here)**
+
+**JWT** — JSON Web Token. A set of claims carried as a JWS (or JWE). Signed
+JWTs are what an SD-JWT VC, a Key Binding JWT, a status list token and a signed
+request object all are. **(used here)**
+
+**JWS** — JSON Web Signature. In *compact serialization*, three base64url
+segments joined by dots: `header.payload.signature`. The signature covers the
+first two segments joined by the dot, which is why they must be verified as
+received rather than re-serialised. **(used here)**
+
+**JWE** — JSON Web Encryption. What `direct_post.jwt` wraps a response in.
+**(used here)**
+
+**JWK** — JSON Web Key. A public (or private) key as JSON. The holder's key in
+an SD-JWT VC `cnf.jwk` is one, and so is the ephemeral encryption key a verifier
+publishes in `client_metadata`. **(used here)**
+
+**CBOR** — Concise Binary Object Representation, RFC 8949. A binary encoding
+with a JSON-like data model. What mdoc is written in. **(used here)**
+
+**COSE** — CBOR Object Signing and Encryption, RFC 9052 (structures) and RFC
+9053 (algorithms). The CBOR counterpart to JOSE. **(used here)**
+
+**COSE_Sign1** — a COSE single-signer signed object: protected header,
+unprotected header, payload, signature. An mdoc's `issuerAuth` and its device
+signature are both COSE_Sign1. **(used here)**
+
+**`Sig_structure`** — what a COSE signature actually covers, and a common
+source of bugs: not the payload alone but an array committing to the protected
+header, any external data, and the payload (RFC 9052 §4.4). Verifying the
+payload by itself would let a signature be moved to another algorithm or
+context. **(used here)**
+
+**Detached payload** — a COSE_Sign1 carrying `null` where the payload would be,
+because the verifier reconstructs it. mdoc device authentication works this way:
+the signed bytes are the `DeviceAuthentication` structure, which never travels.
+**(used here)**
+
+**`x5chain`** — the COSE counterpart of JOSE's `x5c` (see *Trust and PKI*):
+header label 33, RFC 9360, carrying the certificate chain as raw DER rather than
+base64. The same chain in a different encoding, and the only format difference
+that reaches this project's trust code. **(used here)**
+
+**`alg`** — the algorithm a signature claims to use. JOSE names it as a string
+(`ES256`), COSE as a number from the IANA registry (`-7` is ES256, `-35` ES384,
+`-36` ES512). A verifier must check it against a policy, never use it to *select*
+the algorithm: that is how algorithm substitution attacks work. **(used here)**
+
+**ES256 / ES384 / ES512** — ECDSA with SHA-256/384/512 over P-256/P-384/P-521.
+The curve is implied by the algorithm, so a P-256 key cannot perform ES384.
+`ES256` is what the entire EUDI reference deployment signs with, and this
+project's default policy. **(used here)**
+
+**RS256 / PS256** — RSA with SHA-256, twice over, differing only in padding:
+**RS\*** is RSASSA-PKCS1-v1_5, **PS\*** is RSASSA-PSS. Not interchangeable —
+reading one as the other reports a valid signature as invalid. Most of eIDAS
+signs with RSA even though the EUDI pilot does not. **(used here — not in the
+default policy)**
+
+**EdDSA** — signatures over Edwards curves (Ed25519, Ed448). Permitted by ISO
+18013-5 for mdoc alongside ECDSA; not implemented here, because nothing in the
+EUDI deployment uses it.
+
+---
+
 ## SD-JWT mechanics
 
 **Disclosure** — a base64url-encoded `[salt, claim_name, value]` triple,
@@ -383,6 +457,10 @@ failure path ends at exactly one, so callers never parse error strings.
 | **eIDAS Trusted List** — qualified trust services | **EUDI provider lists** — PID providers, published separately |
 | **LOTL** — index of the national eIDAS trusted lists, signed XML | **LOTE** — EUDI list of trusted entities, signed JSON |
 | **`vct`** — SD-JWT VC type | **`doctype`** — mdoc type |
+| **JOSE** — JSON stack: JWS, JWE, JWK, `x5c` | **COSE** — CBOR stack: COSE_Sign1, COSE_Key, `x5chain` |
+| **JWS and COSE** — ECDSA signature as raw `r‖s` | **X.509, CRL, OCSP** — the same signature as a DER sequence |
+| **`RS256`** — RSA with PKCS#1 v1.5 padding | **`PS256`** — RSA with PSS padding, same hash |
+| **`alg`** — what the token *claims* | **`allowedAlgs`** — what the verifier *accepts*; never the other way round |
 | **JAR** — signed *request* | **JARM** — encrypted/signed *response* |
 | **JAR** — signs the request parameters | **PAR** — moves them to a back channel |
 | **WUA** — about the wallet unit and its keys, sent to the *credential* endpoint | **WIA** — about the app instance, sent to the *token* endpoint |
