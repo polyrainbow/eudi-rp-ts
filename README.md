@@ -198,11 +198,10 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 **Simplified, deliberately.**
 
 - **Certificate path validation is partial.** Checked: validity windows,
-  signature linkage, that every issuing certificate is a CA, path length, an
-  optional Extended Key Usage allowlist, Name Constraints (see below), and
-  revocation by CRL or OCSP (see below). Not checked: KeyUsage bits and
-  certificate policies — Node's `X509Certificate` exposes *extended* key usage
-  but not the KeyUsage bit string, so enforcing those means parsing DER by hand.
+  signature linkage, that every issuing certificate is a CA and asserts
+  `keyCertSign`, that the leaf asserts `digitalSignature` (see below), path
+  length, an optional Extended Key Usage allowlist, Name Constraints (see below),
+  and revocation by CRL or OCSP (see below). Not checked: certificate policies.
 - **Trust lists are not fully TS 119 615.** Service status history,
   validity-time evaluation and the list's own issue date and next-update *are*
   implemented (see below). Not implemented: no qualifier processing and no `Sie`
@@ -241,6 +240,43 @@ Two deliberate positions:
 Measured against the live eIDAS trust lists on 2026-08-11: 2 of 1897 anchors
 carry the extension, using only `dNSName` and `iPAddress`. So failing closed on
 an unimplemented form costs nothing today — see REPRODUCE.md.
+
+### Key usage
+
+`basicConstraints` says a certificate *is* a CA; `keyUsage` (RFC 5280 §4.2.1.3)
+says what its key is allowed to do. They are separate assertions, and §6.1.4 (n)
+requires the second to be honoured.
+
+The interesting part is which half was actually missing.
+
+**`keyCertSign` was already enforced, by accident of the platform.** Node's
+`X509Certificate.ca` is OpenSSL's `X509_check_ca`, which clears the CA flag when
+a KeyUsage extension is present without `keyCertSign`; `checkIssued` refuses
+such an issuer as well. So the existing "is it a CA" test had been carrying a
+requirement nobody had written down. The explicit check now in `issuer-key.ts`
+changes no outcome — it is there because Node documents `.ca` as "is this a CA
+certificate" and nothing more, so relying on the rest is relying on an
+undocumented property of the TLS backend. A test pins Node's behaviour beside
+it, so a divergence is a red build rather than a silent loss.
+
+**The leaf's KeyUsage was checked by nobody**, and that is the real gap. No
+library in the tree knows this key is about to verify a credential signature
+rather than a TLS handshake, so nothing looked. A leaf that asserts KeyUsage
+must now include `digitalSignature`. `nonRepudiation` alone does not qualify: it
+covers a non-repudiation service rather than the data-origin signature an issuer
+makes over a credential, and ISO 18013-5 Annex B requires `digitalSignature` on
+a document signer certificate.
+
+An **absent** extension is silence, not refusal, and stays unrestricted — 60 of
+the end-entity certificates on the live trusted lists carry no KeyUsage at all,
+and rejecting them for saying nothing would be wrong.
+
+Measured on 2026-08-12 (REPRODUCE.md): all 1055 CA certificates published across
+the live lists carry KeyUsage and all 1055 assert `keyCertSign`; the EU reference
+PID document signer asserts exactly `digitalSignature`, for the SD-JWT VC and
+the mdoc alike, and its CA asserts `keyCertSign|cRLSign`. So the rules cost
+nothing today — the same measured argument as Name Constraints, and it goes
+stale the same way, so `ecosystem-drift.test.ts` watches it.
 
 ### Trust list validity time
 

@@ -304,6 +304,70 @@ The current entry is republished as a history instance with an identical
 zero-length interval and drops the service. `ServiceInformation` is the status
 in effect by definition rather than by timestamp, and a test pins it.
 
+### Key usage across the trust lists and the reference PKI, 2026-08-12
+
+Whether requiring `keyCertSign` of every issuing certificate and
+`digitalSignature` of every leaf costs anything, measured by reading the
+extension off every anchor the LOTL leads to and off the committed credentials:
+
+```
+$ node -e "…parse each anchor's KeyUsage with @peculiar/asn1-x509…"
+
+unique anchors: 2305
+  basicConstraints CA=true : 1055   KeyUsage absent:  0
+  basicConstraints CA=false: 1250   KeyUsage absent: 60
+CA anchors asserting KeyUsage but NOT keyCertSign: 0
+
+CA bit combinations:
+    849  keyCertSign|cRLSign
+    189  digitalSignature|keyCertSign|cRLSign
+      7  digitalSignature|nonRepudiation|keyCertSign|cRLSign
+      4  digitalSignature|keyCertSign
+      2  keyAgreement|keyCertSign|cRLSign
+      1  keyCertSign
+      1  digitalSignature|keyAgreement|keyCertSign
+      1  digitalSignature|keyAgreement|keyCertSign|cRLSign
+      1  digitalSignature|nonRepudiation|keyEncipherment|dataEncipherment|
+         keyAgreement|keyCertSign|cRLSign
+
+anchors/eudiw-pid-issuer-ca.pem   ca=true   KU=keyCertSign|cRLSign
+PID DS - 002 (SD-JWT VC x5c[0])   ca=false  KU=digitalSignature  EKU=1.0.18013.5.1.2, 1.0.23220.4.1.2
+PID DS - 002 (mdoc x5chain[0])    ca=false  KU=digitalSignature
+```
+
+Three things follow.
+
+**Both rules are free today.** Every one of the 1055 CA certificates asserts
+`keyCertSign`, and the EU reference document signer asserts `digitalSignature`
+in both credential formats. Same measured argument as Name Constraints.
+
+**Most anchors are not CAs.** 1250 of 2305 are end-entity certificates published
+as service digital identities — timestamping units, responders — and 60 of them
+carry no KeyUsage at all. They are legitimately on a trusted list and
+legitimately unable to sign certificates, which is why the `keyCertSign`
+requirement is applied only to certificates actually used as issuers, and why an
+absent extension is read as silence rather than refusal.
+
+**Node was already enforcing half of it.** `X509Certificate.ca` is OpenSSL's
+`X509_check_ca`, which clears the CA flag when KeyUsage is present without
+`keyCertSign`; `checkIssued` refuses such an issuer too. Measured directly:
+
+```
+CA:TRUE + no KeyUsage extension   node .ca = true
+CA:TRUE + [keyCertSign]           node .ca = true
+CA:TRUE + [keyCertSign|cRLSign]   node .ca = true
+CA:TRUE + []                      node .ca = false
+CA:TRUE + [cRLSign]               node .ca = false
+CA:TRUE + [digitalSignature]      node .ca = false
+```
+
+So the issuing-side rule changed no outcome; it is written out because Node
+documents `.ca` only as "is this a CA certificate", and a path validation
+resting on the undocumented remainder would break silently. `key-usage.test.ts`
+pins the table above beside the explicit check. What was genuinely unchecked is
+the **leaf**: nothing in the tree knew that key was about to verify a credential
+signature rather than a TLS handshake.
+
 ### Trust list freshness: what the lists declare about themselves, 2026-08-12
 
 Refusing a list past its own `NextUpdate` is only defensible if the live lists

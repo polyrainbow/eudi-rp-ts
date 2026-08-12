@@ -7,9 +7,10 @@ about where it stops. Before relying on it for anything real, read
 "Spec-compliant vs simplified" there. The gaps that matter most:
 
 - **Certificate path validation is partial.** Signature linkage, validity
-  windows, path length, an optional EKU allowlist, RFC 5280 Name Constraints and
-  revocation by CRL or OCSP are checked; KeyUsage bits and certificate policies
-  are not.
+  windows, path length, an optional EKU allowlist, RFC 5280 Name Constraints,
+  the KeyUsage bits that matter (`keyCertSign` on every issuer,
+  `digitalSignature` on the leaf) and revocation by CRL or OCSP are checked;
+  certificate policies are not.
 - **Trust list processing is not full ETSI TS 119 615.** Service status history,
   validity-time evaluation and the list's own issue date and next-update are
   implemented — a list past its `NextUpdate`, or declaring none, is refused

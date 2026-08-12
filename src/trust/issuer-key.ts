@@ -2,6 +2,7 @@ import { type KeyObject, X509Certificate } from 'node:crypto';
 import { decodeProtectedHeader } from '../crypto.ts';
 import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from './anchors.ts';
+import { readKeyUsage } from './key-usage.ts';
 import { certificateNames, readNameConstraints } from './name-constraints.ts';
 import { checkNames } from './name-matching.ts';
 
@@ -17,14 +18,22 @@ import { checkNames } from './name-matching.ts';
  * reference verifier's client id prefixes are `x509_san_dns` and `x509_hash`.
  *
  * Checked here: validity windows, signature linkage between certificates, that
- * every issuing certificate is a CA, path length, an optional Extended Key
- * Usage allowlist, Name Constraints, and termination at a trust anchor.
+ * every issuing certificate is a CA and asserts `keyCertSign`, that the leaf
+ * asserts `digitalSignature` if it asserts any KeyUsage at all, path length, an
+ * optional Extended Key Usage allowlist, Name Constraints, and termination at a
+ * trust anchor.
+ *
+ * Of those, the *leaf* KeyUsage check is the one nothing else was doing. The
+ * issuing-side `keyCertSign` requirement is already inside Node's `.ca` and
+ * `checkIssued` (see `checkMaySignCertificates`); a leaf's KeyUsage is looked at
+ * by nobody, because no library here knows that this key is about to verify a
+ * credential signature rather than a TLS handshake.
  *
  * NOT checked, and why:
- *   - **KeyUsage bits.** Node's `X509Certificate.keyUsage` exposes *extended*
- *     key usage OIDs, not the KeyUsage bit string, and Node offers no access to
- *     it. Enforcing it would mean parsing the DER extension by hand.
- *   - **Certificate policies**, for the same reason.
+ *   - **Certificate policies.** Node exposes no way to reach them, so it means
+ *     parsing DER — which `key-usage.ts` and `name-constraints.ts` now do for
+ *     their extensions, making this a matter of nobody having needed policy
+ *     processing rather than of it being out of reach.
  *   - **Revocation of the certificates themselves** (CRL, OCSP). Credential
  *     revocation is handled by Token Status List; issuer certificate revocation
  *     is a separate mechanism this does not implement. In the EUDI model a
@@ -130,6 +139,12 @@ export function resolveIssuerCertificateChain(
   for (let i = 0; i < chain.length - 1; i++) {
     const child = chain[i]!;
     const parent = chain[i + 1]!;
+    // Before the `ca` check, because it is the more specific statement: a
+    // certificate marked CA:TRUE whose KeyUsage omits keyCertSign is not "not a
+    // CA", it is a CA refusing to sign certificates, and an operator reading
+    // the rejection needs to be told which.
+    const notEntitled = checkMaySignCertificates(parent, `x5c position ${i + 1}`);
+    if (notEntitled) return reject('ISSUER_UNTRUSTED', notEntitled);
     if (!parent.ca) {
       return reject('ISSUER_UNTRUSTED', `x5c position ${i + 1} is not a CA: ${parent.subject}`);
     }
@@ -151,6 +166,11 @@ export function resolveIssuerCertificateChain(
   if (!equalAnchor && signingAnchor && !signingAnchor.ca) {
     return reject('ISSUER_UNTRUSTED', `Trust anchor is not a CA: ${signingAnchor.subject}`);
   }
+  // No explicit keyCertSign check on the anchor: `findIssuerOf` reaches it
+  // through `checkIssued`, which is OpenSSL's `X509_check_issued` and already
+  // refuses an issuer whose KeyUsage omits the bit. Such an anchor is therefore
+  // never found in the first place, and the rejection below reports it as a
+  // chain that terminates nowhere trusted. A test pins that.
   if (!signingAnchor) {
     // Distinguish "not on any list" from "on a list, but not at this instant":
     // the second is a service whose grant had not started or had ended, and
@@ -175,6 +195,24 @@ export function resolveIssuerCertificateChain(
 
   const leaf = chain[0]!;
 
+  // The leaf's key is about to verify a credential signature, so a leaf that
+  // asserts KeyUsage must include the bit for exactly that. `nonRepudiation`
+  // alone does not qualify: it covers a non-repudiation service, not the
+  // data-origin signature an issuer makes over a credential, and ISO 18013-5
+  // Annex B requires `digitalSignature` on a document signer certificate.
+  let leafUsage;
+  try {
+    leafUsage = readKeyUsage(leaf);
+  } catch (error) {
+    return reject('ISSUER_UNTRUSTED', `Cannot read the key usage of ${leaf.subject}: ${String(error)}`);
+  }
+  if (leafUsage && !leafUsage.bits.has('digitalSignature')) {
+    return reject(
+      'ISSUER_UNTRUSTED',
+      `Issuer certificate does not assert digitalSignature (has ${[...leafUsage.bits].join(', ') || 'no usage'}): ${leaf.subject}`,
+    );
+  }
+
   const requiredEku = options.requiredExtendedKeyUsage ?? [];
   if (requiredEku.length > 0) {
     const present = leaf.keyUsage ?? [];
@@ -194,6 +232,40 @@ export function resolveIssuerCertificateChain(
   }
 
   return accept({ publicKey: leaf.publicKey, leaf, chain: fullChain });
+}
+
+/**
+ * May this certificate sign other certificates? (RFC 5280 §4.2.1.3, §6.1.4 (n))
+ *
+ * `basicConstraints` says a certificate *is* a CA; `keyUsage` says what its key
+ * is allowed to do. A certificate marked CA:TRUE whose KeyUsage omits
+ * `keyCertSign` is refusing the use about to be made of it, and RFC 5280
+ * requires that refusal be honoured.
+ *
+ * **Node already enforces this, and that is worth stating plainly**: `.ca` is
+ * OpenSSL's `X509_check_ca`, which clears the CA flag when a KeyUsage extension
+ * is present without `keyCertSign`, and `checkIssued` refuses such an issuer
+ * too. So this changes no outcome today. It is here because Node documents `.ca`
+ * as "is a CA certificate" and nothing more — the keyCertSign part is an
+ * undocumented property of the TLS backend, not a promise, and a path
+ * validation resting on it silently would break silently. A test pins Node's
+ * behaviour next to this one, so the day the two diverge is a red build rather
+ * than a quiet loss.
+ *
+ * An absent extension is not a refusal — it is silence, which §4.2.1.3 leaves
+ * unrestricted, and Node reads it the same way. The distinction costs nothing on
+ * the live lists: all 1055 CA certificates published across them carry KeyUsage
+ * and all 1055 assert `keyCertSign` (REPRODUCE.md).
+ */
+function checkMaySignCertificates(cert: X509Certificate, position: string): string | undefined {
+  let usage;
+  try {
+    usage = readKeyUsage(cert);
+  } catch (error) {
+    return `Cannot read the key usage of ${cert.subject}: ${String(error)}`;
+  }
+  if (!usage || usage.bits.has('keyCertSign')) return undefined;
+  return `${position} does not assert keyCertSign (has ${[...usage.bits].join(', ') || 'no usage'}): ${cert.subject}`;
 }
 
 /**

@@ -32,6 +32,20 @@ export type NameSpec =
   | { directoryName: string }
   | { registeredID: string };
 
+/**
+ * KeyUsage bits, by name (RFC 5280 §4.2.1.3).
+ *
+ * Omitting the option entirely leaves the extension absent, which is a
+ * different statement from an empty list: absent is silence, empty is a
+ * certificate refusing every use.
+ */
+export type KeyUsageName = keyof typeof x509.KeyUsageFlags;
+
+function keyUsageExtension(usages: KeyUsageName[]): x509.KeyUsagesExtension {
+  const flags = usages.reduce((mask, name) => mask | x509.KeyUsageFlags[name], 0);
+  return new x509.KeyUsagesExtension(flags, true);
+}
+
 export type ConstraintSpec = {
   permitted?: NameSpec[];
   excluded?: NameSpec[];
@@ -79,7 +93,7 @@ const YEAR = 365 * 24 * 60 * 60 * 1000;
 export async function createCa(
   subject: string,
   constraints?: ConstraintSpec,
-  options: { pathLength?: number } = {},
+  options: { pathLength?: number; keyUsage?: KeyUsageName[] } = {},
 ): Promise<Issued> {
   const keys = (await webcrypto.subtle.generateKey(ALG, true, ['sign', 'verify'])) as CryptoKeyPair;
   const cert = await x509.X509CertificateGenerator.createSelfSigned({
@@ -91,6 +105,7 @@ export async function createCa(
     keys: keys as never,
     extensions: [
       new x509.BasicConstraintsExtension(true, options.pathLength ?? 3, true),
+      ...(options.keyUsage ? [keyUsageExtension(options.keyUsage)] : []),
       ...(constraints
         ? [new x509.Extension('2.5.29.30', constraints.critical ?? true, nameConstraintsDer(constraints))]
         : []),
@@ -108,12 +123,14 @@ export async function issue(
     constraints?: ConstraintSpec;
     subjectAltNames?: NameSpec[];
     serial?: string;
+    keyUsage?: KeyUsageName[];
   } = {},
 ): Promise<Issued> {
   const keys = (await webcrypto.subtle.generateKey(ALG, true, ['sign', 'verify'])) as CryptoKeyPair;
   const isCa = options.ca ?? options.constraints !== undefined;
 
   const extensions: x509.Extension[] = [new x509.BasicConstraintsExtension(isCa, isCa ? 2 : undefined, true)];
+  if (options.keyUsage) extensions.push(keyUsageExtension(options.keyUsage));
   if (options.constraints) {
     extensions.push(
       new x509.Extension('2.5.29.30', options.constraints.critical ?? true, nameConstraintsDer(options.constraints)),

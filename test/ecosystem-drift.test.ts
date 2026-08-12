@@ -10,6 +10,7 @@ import {
   parseTrustServices,
   verifyTrustList,
 } from '../src/trust/lotl.ts';
+import { readKeyUsage } from '../src/trust/key-usage.ts';
 import { readNameConstraints } from '../src/trust/name-constraints.ts';
 import { checkChainRevocation, readOcspResponders } from '../src/trust/revocation.ts';
 
@@ -181,6 +182,8 @@ describe('the live trusted lists', { skip }, () => {
     let grantedServices = 0;
     let missingStartingTime = 0;
     let identifiedWithoutCertificate = 0;
+    let caAnchors = 0;
+    const caWithoutKeyCertSign: string[] = [];
     const missingIssueDate: string[] = [];
     const unbounded: string[] = [];
     const lapsed: string[] = [];
@@ -226,6 +229,19 @@ describe('the live trusted lists', { skip }, () => {
       const parsed = parseTrustServices(xml, []);
       for (const entry of parsed) {
         anchors.push(entry.certificate);
+
+        // Path validation requires keyCertSign of anything used as an issuer.
+        // Only CA certificates can be: more than half of what these lists
+        // publish is end-entity certificates identifying a service, which never
+        // sign anything and are not asked to.
+        if (entry.certificate.ca) {
+          caAnchors += 1;
+          const usage = readKeyUsage(entry.certificate);
+          if (usage && !usage.bits.has('keyCertSign')) {
+            caWithoutKeyCertSign.push(entry.certificate.subject.split('\n')[0] ?? '?');
+          }
+        }
+
         let constraints;
         try {
           constraints = readNameConstraints(entry.certificate);
@@ -248,7 +264,7 @@ describe('the live trusted lists', { skip }, () => {
     t.diagnostic(
       `${grantedServices} granted services across ${pointers.length - unreachable.length} lists; ` +
         `${identifiedWithoutCertificate} identify themselves without a certificate; ` +
-        `${anchors.length} service entries yielded a certificate; ` +
+        `${anchors.length} service entries yielded a certificate, ${caAnchors} of them CAs; ` +
         `unreachable: ${unreachable.join(', ') || 'none'}`,
     );
 
@@ -277,6 +293,15 @@ describe('the live trusted lists', { skip }, () => {
       news(
         `A CA on a trusted list now carries a Name Constraint in a form this project does not implement: ${[...unimplementedForms].join(', ')}`,
         'chains under that CA now fail closed with ISSUER_NAME_NOT_PERMITTED. Implement the form in src/trust/name-matching.ts — the "costs nothing today" argument in README "Name Constraints" no longer holds.',
+      ),
+    );
+
+    assert.deepEqual(
+      caWithoutKeyCertSign,
+      [],
+      news(
+        `${caWithoutKeyCertSign.length} of ${caAnchors} CA certificates on the trusted lists assert KeyUsage without keyCertSign: ${caWithoutKeyCertSign.slice(0, 5).join('; ')}`,
+        'chains through those CAs now fail closed. RFC 5280 §6.1.4 (n) says that is correct, but the "costs nothing today" argument in README "Key usage" no longer holds and REPRODUCE.md needs the new figure.',
       ),
     );
 
