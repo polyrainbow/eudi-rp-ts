@@ -1,5 +1,6 @@
 import { type Outcome, accept, reject } from '../result.ts';
 import type { JwsAlg } from '../crypto.ts';
+import type { TtlCache } from '../fetching.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
 import type { PathValidationOptions } from '../trust/issuer-key.ts';
 import { decode, encode, encodeTag24, get, toBytes, untag } from './cbor.ts';
@@ -32,6 +33,12 @@ export type DeviceResponseOptions = {
   pathValidation?: PathValidationOptions;
   now?: Date;
   tolerateMalformedValidityDates?: boolean;
+  /** Revocation, handled by `verifyMdoc`; on by default and fails closed. */
+  checkStatus?: boolean;
+  statusFetch?: typeof fetch;
+  statusCache?: TtlCache<string>;
+  statusTimeoutMs?: number;
+  clockSkewSeconds?: number;
 };
 
 export type VerifiedDeviceResponse = VerifiedMdoc & {
@@ -89,6 +96,11 @@ export async function verifyDeviceResponse(
     ...(options.tolerateMalformedValidityDates
       ? { tolerateMalformedValidityDates: options.tolerateMalformedValidityDates }
       : {}),
+    ...(options.checkStatus !== undefined ? { checkStatus: options.checkStatus } : {}),
+    ...(options.statusFetch ? { statusFetch: options.statusFetch } : {}),
+    ...(options.statusCache ? { statusCache: options.statusCache } : {}),
+    ...(options.statusTimeoutMs ? { statusTimeoutMs: options.statusTimeoutMs } : {}),
+    ...(options.clockSkewSeconds ? { clockSkewSeconds: options.clockSkewSeconds } : {}),
   });
   if (!verified.verified) return verified;
 

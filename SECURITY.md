@@ -15,7 +15,11 @@ about where it stops. Before relying on it for anything real, read
 - **Sessions are in memory**, so a restart drops them and more than one
   instance breaks them.
 
-Credential revocation via Token Status List **is** checked, and fails closed.
+Credential revocation via Token Status List **is** checked, for SD-JWT VC and
+mdoc alike, and fails closed. The one revocation mechanism not implemented is
+the `identifier_list` the EU reference issuer publishes alongside its status
+list; a credential offering *only* that is rejected rather than accepted
+unchecked.
 
 ## Test key material is committed on purpose
 

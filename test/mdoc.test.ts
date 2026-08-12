@@ -28,6 +28,10 @@ const base = {
   expectedDocType: 'eu.europa.ec.eudi.pid.1',
   // The reference issuer emits a malformed validUntil; see the assertions below.
   tolerateMalformedValidityDates: true,
+  // The real credential carries a live status list at issuer.eudiw.dev. These
+  // assertions are about the signature and digests, so they stay offline; the
+  // status path has its own suite below and in test/status.test.ts.
+  checkStatus: false,
   now: NOW,
 };
 
@@ -98,6 +102,98 @@ describe('mdoc from the EU reference issuer', () => {
     const age = evaluateAgeOver18Mdoc(elements, NOW);
     assert.equal(age.verified, true);
     assert.equal(age.value.evidence, 'birthdate');
+  });
+});
+
+/**
+ * mdoc revocation.
+ *
+ * The EU reference issuer publishes a status list for its mdoc PIDs exactly as
+ * it does for the SD-JWT VC ones, so an mdoc whose status is never checked is
+ * one that stays accepted after revocation. The round trip runs against the
+ * synthetic credential from `npm run fixtures`, because a status list the real
+ * issuer would accept has to be signed by the real issuer's CA.
+ */
+describe('mdoc revocation', () => {
+  const fixtures = JSON.parse(
+    readFileSync(fileURLToPath(new URL('./fixtures/credentials.json', import.meta.url)), 'utf8'),
+  );
+  const mdoc = fixtures.mdoc;
+  const synthetic = {
+    issuerSigned: mdoc.withStatus as string,
+    anchors: ourAnchors,
+    expectedDocType: mdoc.docType as string,
+    now: new Date('2026-06-01T00:00:00Z'),
+  };
+
+  const serving = (token: string, contentType = 'application/statuslist+jwt'): typeof fetch =>
+    (async () => new Response(token, { status: 200, headers: { 'content-type': contentType } })) as typeof fetch;
+
+  it('accepts an mdoc whose status bit is clear', async () => {
+    const result = await verifyMdoc({ ...synthetic, statusFetch: serving(mdoc.statusLists.valid) });
+
+    assert.equal(result.verified, true, JSON.stringify(result));
+    assert.equal(result.value.claims[mdoc.docType]!['family_name'], 'Mustermann');
+  });
+
+  it('rejects a revoked mdoc', async () => {
+    const result = await verifyMdoc({ ...synthetic, statusFetch: serving(mdoc.statusLists.revoked) });
+
+    assert.equal(result.verified, false, 'a revoked mdoc must not verify');
+    assert.equal(result.reason, 'CREDENTIAL_REVOKED');
+  });
+
+  it('fails closed when the status list cannot be fetched', async () => {
+    const result = await verifyMdoc({
+      ...synthetic,
+      statusFetch: (async () => new Response('nope', { status: 503 })) as typeof fetch,
+    });
+
+    assert.equal(result.verified, false);
+    assert.equal(result.reason, 'STATUS_UNAVAILABLE');
+  });
+
+  it('rejects a status list signed outside the trust anchors', async () => {
+    const result = await verifyMdoc({
+      ...synthetic,
+      statusFetch: serving(fixtures.statusLists.untrustedSigner),
+    });
+
+    assert.equal(result.verified, false);
+    assert.equal(result.reason, 'STATUS_UNAVAILABLE');
+  });
+
+  it('does not fetch anything for an mdoc with no status element', async () => {
+    let fetched = false;
+    const result = await verifyMdoc({
+      ...synthetic,
+      issuerSigned: mdoc.withoutStatus,
+      statusFetch: (async () => {
+        fetched = true;
+        return new Response('', { status: 200 });
+      }) as typeof fetch,
+    });
+
+    assert.equal(result.verified, true, JSON.stringify(result));
+    assert.equal(fetched, false, 'nothing to check means nothing to fetch');
+  });
+
+  it('reads the status reference the real reference issuer publishes', async () => {
+    // Not a synthetic concern: the committed real credential carries one, which
+    // is why it was worth checking at all.
+    let requested: string | undefined;
+    const result = await verifyMdoc({
+      ...base,
+      checkStatus: true,
+      statusFetch: (async (url: string) => {
+        requested = String(url);
+        return new Response('nope', { status: 503 });
+      }) as unknown as typeof fetch,
+    });
+
+    assert.match(requested ?? '', /^https:\/\/issuer\.eudiw\.dev\/token_status_list\//);
+    assert.equal(result.verified, false);
+    assert.equal(result.reason, 'STATUS_UNAVAILABLE');
   });
 });
 
@@ -205,6 +301,9 @@ describe('device authentication', () => {
     sessionTranscript,
     expectedDocType: 'eu.europa.ec.eudi.pid.1',
     tolerateMalformedValidityDates: true,
+    // These assertions are about the device signature; revocation has its own
+    // suite. Left on, the real credential's status list would be fetched live.
+    checkStatus: false,
     now: NOW,
   };
   const present = (overrides = {}) =>

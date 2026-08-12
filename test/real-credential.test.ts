@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { verifyMdoc } from '../src/mdoc/verify.ts';
 import { evaluateAgeOver18 } from '../src/predicate/age.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { verifyAgeOver18, verifyCredential } from '../src/verify.ts';
@@ -189,6 +190,25 @@ describe('real status list (network)', { skip: process.env['RUN_NETWORK_TESTS'] 
 
     // Either it is still valid, or the issuer has revoked it since — both
     // prove the list was fetched, authenticated and read.
+    if (!result.verified) {
+      assert.equal(result.reason, 'CREDENTIAL_REVOKED', result.detail);
+    }
+  });
+
+  it('fetches and verifies the live status list for the mdoc too', async () => {
+    // The reference issuer publishes a status list for its mdoc PIDs as well,
+    // at a different URI, and the MSO carries the reference. Offline fixtures
+    // prove the logic; this proves the real endpoint answers and the real list
+    // authenticates against the real PID Issuer CA.
+    const result = await verifyMdoc({
+      issuerSigned: readFileSync(`${dir}eudiw-pid-mdoc.txt`, 'utf8').trim(),
+      anchors,
+      expectedDocType: 'eu.europa.ec.eudi.pid.1',
+      tolerateMalformedValidityDates: true,
+      checkStatus: true,
+      now: new Date(),
+    });
+
     if (!result.verified) {
       assert.equal(result.reason, 'CREDENTIAL_REVOKED', result.detail);
     }

@@ -204,6 +204,9 @@ export async function verifyCredential(
     ...(options.statusFetch ? { fetchImpl: options.statusFetch } : {}),
     ...(options.statusCache ? { cache: options.statusCache } : {}),
     ...(options.statusTimeoutMs ? { timeoutMs: options.statusTimeoutMs } : {}),
+    // The same tolerance the credential's own `exp` gets, so the status list
+    // and the credential are judged against one clock.
+    ...(options.clockSkewSeconds ? { clockSkewSeconds: options.clockSkewSeconds } : {}),
   });
 
   const sdjwt = new SDJwtVcInstance({

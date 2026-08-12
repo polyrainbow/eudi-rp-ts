@@ -177,8 +177,10 @@ reveals nothing else. A test asserts the verifier learns nothing more.
 
 ## Spec-compliant vs simplified
 
-**Compliant.** Token Status List revocation, including verifying the status
-list token's own signature against the same trust anchors; SD-JWT digests and
+**Compliant.** Token Status List revocation **for both credential formats**,
+including verifying the status list token's own signature against the same trust
+anchors, that its `sub` is the URI the credential named, and that it has not
+expired; SD-JWT digests and
 disclosures (RFC 9901); SD-JWT VC media types
 `dc+sd-jwt` and transitional `vc+sd-jwt` (draft-18); OID4VP 1.0 request and
 response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
@@ -255,7 +257,9 @@ cannot verify — a test asserts exactly that through the full handler.
 a wallet actually sends. Both run issuer identity through the same
 `TrustAnchors` and path validation as SD-JWT VC — mdoc carries its chain in a
 COSE `x5chain` header rather than a JOSE `x5c`, and that is the only difference
-that reaches the trust code.
+that reaches the trust code — and both check the MSO's status reference against
+the same Token Status List code, on by default and failing closed. See
+[Revocation](#revocation).
 
 A DeviceResponse carries two independent signatures. **issuerAuth** proves the
 issuer attested the claims; **deviceSignature** proves the wallet holds the key
@@ -266,7 +270,12 @@ commits to our client identifier, nonce and response URI. Tests assert that a
 response replayed at another verifier, bound to a nonce we never issued, or
 signed by a different key, is rejected.
 
-Two things the real reference credential taught us, both pinned by tests:
+Three things the real reference credential taught us, all pinned by tests:
+
+- **Its MSO carries a status reference**, `status.status_list`, pointing at
+  `issuer.eudiw.dev/token_status_list/...` — and an `identifier_list` beside it.
+  So an mdoc verifier that skips revocation is not making a theoretical
+  omission; it is ignoring something this issuer actually publishes.
 
 - **Its mdoc PID carries no age predicate** — no `age_over_18`, matching the
   SD-JWT VC's missing `age_equal_or_over`. It *does* carry `birth_date`; the
@@ -285,21 +294,40 @@ than a gap.
 
 ## Revocation
 
-A credential's `status.status_list` names a URI and an index; the URI serves a
+A credential's status reference names a URI and an index; the URI serves a
 signed token holding a bitstring, and the bit at that index says whether the
-credential is still valid. The EU reference issuer publishes one for every PID.
+credential is still valid. The EU reference issuer publishes one for every PID,
+**in both formats** — `status.status_list` in the SD-JWT VC's claims, the same
+structure in the mdoc's MobileSecurityObject. Both are checked, by the same code
+in `src/trust/status.ts`, on the same terms. The format a wallet happens to
+answer in does not decide whether revocation is checked.
 
-`@sd-jwt/sd-jwt-vc` drives this but leaves fetching **and verifying the list's
-own signature** to the relying party — it refuses to proceed without a
-`statusVerifier`, which is the right call: an unauthenticated status list would
-let anyone who can answer an HTTP request declare a revoked credential valid.
-`src/trust/status.ts` chains the list's `x5c` to the same trust anchors as the
-credential, and checks its `typ` is `statuslist+jwt` so a credential cannot be
-replayed as its own status list.
+`@sd-jwt/sd-jwt-vc` drives the SD-JWT VC flow but leaves fetching **and
+verifying the list's own signature** to the relying party — it refuses to
+proceed without a `statusVerifier`, which is the right call: an unauthenticated
+status list would let anyone who can answer an HTTP request declare a revoked
+credential valid. On the mdoc side nothing drives anything, so `checkStatusList`
+is the whole check in one call. Four things are established before a bit is read:
+
+- **The signature**, with the list's `x5c` chained to the same trust anchors as
+  the credential.
+- **`typ` is `statuslist+jwt`**, so a credential cannot be replayed as its own
+  status list.
+- **`sub` is the URI the credential named.** The signature alone only proves
+  that *a* trusted issuer produced *a* status list. Without this, anyone able to
+  answer at that URI — a redirect, a hijacked name, a stale cache — can
+  substitute another list that the same anchors validate, and we index into it.
+- **It has not expired.** Checked against the same clock and skew as the
+  credential, and re-checked on a cache hit, because a token cached while fresh
+  can expire before its cache entry does.
 
 **It fails closed.** An unreachable or unverifiable status list is
 `STATUS_UNAVAILABLE`, not a pass — a verifier that accepts what it could not
-check has no revocation at all.
+check has no revocation at all. So is an index past the end of the published
+list, and so is a `status` element offering only a mechanism we do not implement:
+the EU reference issuer's mdoc also carries an `identifier_list`, which is not
+implemented, and an issuer who told us how to revoke in terms we cannot read has
+not told us the credential is valid.
 
 Status lists cover many credentials, so pass a shared `statusCache`
 (`createStatusListCache()`) in anything serving traffic; without one every
@@ -344,6 +372,14 @@ one string and silently turned `STATUS_UNAVAILABLE` into `CREDENTIAL_MALFORMED`.
 Every distinction that matters is now either checked explicitly or recorded by a
 callback, and a test pins that a structural defect is not reported as a bad
 signature.
+
+The same pressure shows up in *where* a check runs, not just how it reports.
+`@sd-jwt/core` validates the status list token's `exp` itself and throws before
+it calls our `statusVerifier`, so an expiry check made in that callback would
+never run — and a stale list would be reported as a malformed credential,
+blaming the holder for the issuer's housekeeping. Everything that binds a status
+list to the credential and to now is therefore checked in the *fetcher*, which
+the library calls first. A test pins the resulting code.
 
 **Events carry no personal data by construction** — no claim values, no subject
 identifiers, no credential bytes. A test asserts it. An audit trail that quietly
@@ -573,6 +609,12 @@ response belongs to, before it can be decrypted.
 `test/fixtures/` is generated by `npm run fixtures` and committed. The
 credentials are signed by a throwaway CA created by that script. They prove our
 verification logic is correct; they say nothing about EUDI interoperability.
+
+That is also why the script issues a synthetic **mdoc**, alongside the real one
+in `test/fixtures/real/`. Proving that a revoked mdoc is rejected needs a status
+list the credential's own issuer signed — and the real credential's issuer is
+the EU reference CA, whose key we obviously do not have. The synthetic pair is
+the only way to test both answers offline.
 
 ## Security
 

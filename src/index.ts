@@ -32,8 +32,13 @@ export { fetchTrustAnchors, parsePointers, parseServiceCertificates, verifyTrust
 export type { Pointer, TrustListOptions, TrustListResult } from './trust/lotl.ts';
 export { resolveIssuerCertificateChain, resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
 export type { PathValidationOptions, ResolvedIssuer } from './trust/issuer-key.ts';
-export { createStatusChecker, createStatusListCache } from './trust/status.ts';
-export type { StatusCheckOptions, StatusChecker, StatusOutcome } from './trust/status.ts';
+export { checkStatusList, createStatusChecker, createStatusListCache } from './trust/status.ts';
+export type {
+  StatusCheckOptions,
+  StatusChecker,
+  StatusListReference,
+  StatusOutcome,
+} from './trust/status.ts';
 
 // Outbound HTTP with a deadline, a size limit, and a TTL cache for status and
 // trust lists. The defaults are policy, so they are exported to be read or

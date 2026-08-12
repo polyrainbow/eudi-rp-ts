@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { Outcome, ReasonCode, Rejected } from '../src/result.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
-import { createStatusListCache } from '../src/trust/status.ts';
+import { checkStatusList, createStatusListCache } from '../src/trust/status.ts';
 import { verifyAgeOver18 } from '../src/verify.ts';
 
 const dir = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -108,6 +108,87 @@ describe('status list', () => {
     fetched = false;
     await verifyAgeOver18({ ...base, statusFetch: spy, checkStatus: false });
     assert.equal(fetched, false, 'checkStatus: false must skip the fetch');
+  });
+
+  it('rejects a correctly signed status list published for another URI', async () => {
+    // The signature only proves a trusted issuer produced some status list.
+    // Binding `sub` to the URI the credential named is what proves it is *this*
+    // credential's list — without it, anyone who can answer at that URI can
+    // substitute another list the same anchors validate, and we index into it.
+    const result = await verifyAgeOver18({
+      ...base,
+      statusFetch: serving(fixtures.statusLists.wrongSubject),
+    });
+
+    assertRejected(result, 'STATUS_UNAVAILABLE');
+    assert.match(result.detail, /sub/);
+  });
+
+  it('rejects an expired status list as unavailable, not as a malformed credential', async () => {
+    // `@sd-jwt/core` checks the status list's own `exp` before it calls our
+    // verifier and throws, so a check made in the verifier callback would run
+    // too late to record anything — and the rejection would surface as
+    // CREDENTIAL_MALFORMED, blaming the credential for the issuer's stale list.
+    const result = await verifyAgeOver18({
+      ...base,
+      statusFetch: serving(fixtures.statusLists.expired),
+    });
+
+    assertRejected(result, 'STATUS_UNAVAILABLE');
+    assert.match(result.detail, /expired/i);
+  });
+
+  it('rechecks expiry on a cache hit', async () => {
+    // A token cached while fresh can expire before its cache entry does, so the
+    // freshness check has to run on the hit as well as on the miss. This one
+    // expires 2026-07-01, long before the credential does.
+    const cache = createStatusListCache();
+    const statusFetch = serving(fixtures.statusLists.expiringSoon);
+
+    const fresh = await verifyAgeOver18({ ...base, statusFetch, statusCache: cache });
+    assert.equal(fresh.verified, true, JSON.stringify(fresh));
+
+    const stale = await verifyAgeOver18({
+      ...base,
+      statusFetch,
+      statusCache: cache,
+      now: new Date('2026-08-01T00:00:00Z'),
+    });
+    assertRejected(stale, 'STATUS_UNAVAILABLE');
+    assert.match(stale.detail, /expired/i);
+  });
+
+  it('unpacks every permitted status size', async () => {
+    // The bitstring is read here rather than by a dependency, so this checks
+    // our unpacking against the reference implementation's packing: statuses
+    // are `bits` wide, first status in the *least* significant bits of the
+    // first byte (draft-ietf-oauth-status-list §4.1).
+    for (const [bits, { uri, token }] of Object.entries<{ uri: string; token: string }>(
+      fixtures.statusListWidths,
+    )) {
+      const width = Number(bits);
+      const check = (index: number) =>
+        checkStatusList({ uri, index }, { anchors, now: NOW, fetchImpl: serving(token) });
+
+      assert.deepEqual(await check(3), { kind: 'revoked', status: 1 }, `bits ${bits}, index 3`);
+      assert.deepEqual(
+        await check(7),
+        { kind: 'revoked', status: 2 ** width - 1 },
+        `bits ${bits}, index 7 must read the widest value the size allows`,
+      );
+      assert.deepEqual(await check(5), { kind: 'valid' }, `bits ${bits}, index 5`);
+    }
+  });
+
+  it('refuses an index past the end of the list', async () => {
+    // Reading a bit the issuer never published is not evidence of anything, so
+    // it cannot resolve to "not revoked".
+    const outcome = await checkStatusList(
+      { uri: fixtures.statusUri, index: 100_000 },
+      { anchors, now: NOW, fetchImpl: serving(fixtures.statusLists.valid) },
+    );
+
+    assert.equal(outcome.kind, 'unavailable');
   });
 
   it('does not refetch a dead status endpoint once per credential', async () => {

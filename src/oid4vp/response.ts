@@ -198,6 +198,11 @@ async function verifyMdocPresentation(
     sessionTranscript: transcript.value,
     expectedDocType: PID_MDOC_NAMESPACE,
     ...(context.tolerateMalformedMdocValidity ? { tolerateMalformedValidityDates: true } : {}),
+    // Same revocation policy and the same cache as the SD-JWT VC branch: the
+    // format a wallet happens to answer in must not decide whether the
+    // credential's status is checked.
+    checkStatus: context.config.checkStatus,
+    ...(context.statusCache ? { statusCache: context.statusCache } : {}),
   });
   if (!result.verified) return result;
 

@@ -13,11 +13,12 @@
 import 'reflect-metadata';
 import * as x509 from '@peculiar/x509';
 import { SDJwtVcInstance } from '@sd-jwt/sd-jwt-vc';
-import { webcrypto } from 'node:crypto';
+import { createHash, webcrypto } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { StatusList, createHeaderAndPayload } from '@owf/token-status-list';
 import { base64urlEncode, hasher } from '../src/crypto.ts';
+import { decode, encode, encodeTag24 } from '../src/mdoc/cbor.ts';
 
 x509.cryptoProvider.set(webcrypto as never);
 
@@ -118,6 +119,9 @@ const DISCLOSURE_FRAME = {
 /** Index this fixture occupies in the status list. */
 const STATUS_INDEX = 7;
 const STATUS_URI = 'https://issuer.example/status/1';
+/** The mdoc fixture's own index, distinct so a mix-up cannot pass unnoticed. */
+const MDOC_STATUS_INDEX = 12;
+const MDOC_STATUS_URI = 'https://issuer.example/status/mdoc/1';
 
 /**
  * A signed Token Status List, so revocation can be tested offline.
@@ -130,13 +134,23 @@ async function statusListJwt(
   signingKey: webcrypto.CryptoKey,
   x5c: string[],
   revokedIndex: number | undefined,
+  overrides: { sub?: string; exp?: number; bits?: 1 | 2 | 4 | 8; statuses?: Record<number, number> } = {},
 ): Promise<string> {
-  const list = new StatusList(new Array(64).fill(0), 1);
+  const bits = overrides.bits ?? 1;
+  const list = new StatusList(new Array(64).fill(0), bits);
   if (revokedIndex !== undefined) list.setStatus(revokedIndex, 1);
+  for (const [index, value] of Object.entries(overrides.statuses ?? {})) {
+    list.setStatus(Number(index), value);
+  }
 
   const { header, payload } = createHeaderAndPayload(
     list,
-    { iss: 'https://issuer.example', sub: STATUS_URI, iat: Math.floor(ISSUED_AT.getTime() / 1000) },
+    {
+      iss: 'https://issuer.example',
+      sub: overrides.sub ?? STATUS_URI,
+      iat: Math.floor(ISSUED_AT.getTime() / 1000),
+      ...(overrides.exp !== undefined ? { exp: overrides.exp } : {}),
+    },
     { alg: 'ES256', typ: 'statuslist+jwt', x5c } as never,
   );
 
@@ -147,6 +161,88 @@ async function statusListJwt(
     new Uint8Array(await webcrypto.subtle.sign(SIGN, signingKey, new TextEncoder().encode(signingInput))),
   );
   return `${signingInput}.${signature}`;
+}
+
+/**
+ * A minimal issued mdoc, so mdoc revocation can be tested offline in both
+ * directions.
+ *
+ * The real credential in `test/fixtures/real/` carries a status list too, but
+ * it is signed by the EU reference issuer's CA — whose key we obviously do not
+ * have, so no status list we can mint would verify against it. Proving that a
+ * revoked mdoc is rejected, and an unrevoked one accepted, needs a credential
+ * signed by the throwaway CA here.
+ *
+ * Only what `verifyMdoc` reads: no device authentication, so the device key is
+ * present but never used.
+ */
+async function issueMdoc(options: {
+  signingKey: webcrypto.CryptoKey;
+  x5c: string[];
+  docType: string;
+  deviceKey: webcrypto.JsonWebKey;
+  elements: Record<string, unknown>;
+  status?: { idx: number; uri: string };
+}): Promise<string> {
+  const namespace = options.docType;
+
+  // IssuerSignedItemBytes = #6.24(bstr .cbor IssuerSignedItem), and the digest
+  // covers those exact bytes — so they are built once and both hashed and
+  // embedded, never re-encoded.
+  const items = Object.entries(options.elements).map(([elementIdentifier, elementValue], index) => {
+    const item = encode({
+      digestID: index,
+      random: webcrypto.getRandomValues(new Uint8Array(16)),
+      elementIdentifier,
+      elementValue,
+    });
+    return { digestID: index, tagged: encodeTag24(item) };
+  });
+
+  const valueDigests = new Map(
+    items.map(({ digestID, tagged }) => [
+      digestID,
+      new Uint8Array(createHash('sha256').update(tagged).digest()),
+    ]),
+  );
+
+  const mso = {
+    version: '1.0',
+    digestAlgorithm: 'SHA-256',
+    valueDigests: { [namespace]: valueDigests },
+    deviceKeyInfo: {
+      // COSE_Key, EC2 / P-256 (RFC 9052 §7).
+      deviceKey: new Map<number, unknown>([
+        [1, 2],
+        [-1, 1],
+        [-2, new Uint8Array(Buffer.from(options.deviceKey.x!, 'base64url'))],
+        [-3, new Uint8Array(Buffer.from(options.deviceKey.y!, 'base64url'))],
+      ]),
+    },
+    docType: options.docType,
+    validityInfo: { signed: ISSUED_AT, validFrom: ISSUED_AT, validUntil: EXPIRES_AT },
+    ...(options.status ? { status: { status_list: options.status } } : {}),
+  };
+
+  const protectedBytes = encode(new Map<number, unknown>([[1, -7]]));
+  const payload = encodeTag24(encode(mso));
+  const sigStructure = encode(['Signature1', protectedBytes, new Uint8Array(0), payload]);
+  const signature = new Uint8Array(
+    await webcrypto.subtle.sign(SIGN, options.signingKey, sigStructure),
+  );
+
+  const issuerSigned = {
+    nameSpaces: { [namespace]: items.map(({ tagged }) => decode(tagged)) },
+    // x5chain (label 33) in the unprotected header, as the EU issuer emits it.
+    issuerAuth: [
+      protectedBytes,
+      new Map<number, unknown>([[33, options.x5c.map((c) => new Uint8Array(Buffer.from(c, 'base64')))]]),
+      payload,
+      signature,
+    ],
+  };
+
+  return Buffer.from(encode(issuerSigned)).toString('base64url');
 }
 
 const DISCLOSURE_FRAME_NO_AGE = {
@@ -272,6 +368,30 @@ async function main() {
     present: onlyAge18,
   });
 
+  const device = await webcrypto.subtle.generateKey(ALG, true, ['sign', 'verify']);
+  const deviceJwk = await webcrypto.subtle.exportKey('jwk', device.publicKey);
+  const devicePrivateJwk = await webcrypto.subtle.exportKey('jwk', device.privateKey);
+
+  const mdocElements = { family_name: 'Mustermann', given_name: 'Erika', birth_date: '1990-06-12' };
+  const mdocDocType = 'eu.europa.ec.eudi.pid.1';
+
+  const mdocWithStatus = await issueMdoc({
+    signingKey: issuer.keys.privateKey,
+    x5c: x5c(issuer.cert),
+    docType: mdocDocType,
+    deviceKey: deviceJwk,
+    elements: mdocElements,
+    status: { idx: MDOC_STATUS_INDEX, uri: MDOC_STATUS_URI },
+  });
+
+  const mdocWithoutStatus = await issueMdoc({
+    signingKey: issuer.keys.privateKey,
+    x5c: x5c(issuer.cert),
+    docType: mdocDocType,
+    deviceKey: deviceJwk,
+    elements: mdocElements,
+  });
+
   await writeFile(`${OUT}trust-anchor.pem`, ca.cert.toString('pem') + '\n');
   await writeFile(`${OUT}rogue-anchor.pem`, rogueCa.cert.toString('pem') + '\n');
   await writeFile(
@@ -302,6 +422,63 @@ async function main() {
             ],
             undefined,
           ),
+          // Correctly signed by the real issuer, but published for a different
+          // URI: what an attacker able to answer at STATUS_URI would serve.
+          wrongSubject: await statusListJwt(issuer.keys.privateKey, x5c(issuer.cert), undefined, {
+            sub: 'https://issuer.example/status/somebody-else',
+          }),
+          // Correctly signed and correctly addressed, but stale.
+          expired: await statusListJwt(issuer.keys.privateKey, x5c(issuer.cert), undefined, {
+            exp: Math.floor(new Date('2026-03-01T00:00:00Z').getTime() / 1000),
+          }),
+          // Expires between two checks, and well before the credential does, so
+          // a test can cache it while fresh and read it back once it is not.
+          expiringSoon: await statusListJwt(issuer.keys.privateKey, x5c(issuer.cert), undefined, {
+            exp: Math.floor(new Date('2026-07-01T00:00:00Z').getTime() / 1000),
+          }),
+        },
+        /**
+         * One list per permitted status size, packed by the reference encoder.
+         *
+         * We unpack the bitstring ourselves rather than take the dependency, so
+         * these pin our reading against their writing. Index 3 holds 1 and
+         * index 7 holds the largest value the width allows; everything else is
+         * zero. Only `bits: 1` occurs in the wild, which is exactly why the
+         * others need fixtures.
+         */
+        statusListWidths: Object.fromEntries(
+          await Promise.all(
+            ([1, 2, 4, 8] as const).map(async (bits) => [
+              bits,
+              {
+                uri: `https://issuer.example/status/bits/${bits}`,
+                token: await statusListJwt(issuer.keys.privateKey, x5c(issuer.cert), undefined, {
+                  sub: `https://issuer.example/status/bits/${bits}`,
+                  bits,
+                  statuses: { 3: 1, 7: 2 ** bits - 1 },
+                }),
+              },
+            ]),
+          ),
+        ),
+        mdoc: {
+          docType: mdocDocType,
+          statusIndex: MDOC_STATUS_INDEX,
+          statusUri: MDOC_STATUS_URI,
+          devicePrivateJwk,
+          withStatus: mdocWithStatus,
+          withoutStatus: mdocWithoutStatus,
+          statusLists: {
+            valid: await statusListJwt(issuer.keys.privateKey, x5c(issuer.cert), undefined, {
+              sub: MDOC_STATUS_URI,
+            }),
+            revoked: await statusListJwt(
+              issuer.keys.privateKey,
+              x5c(issuer.cert),
+              MDOC_STATUS_INDEX,
+              { sub: MDOC_STATUS_URI },
+            ),
+          },
         },
         credentials: {
           withStatus: withStatus.presented,

@@ -1,8 +1,10 @@
 import { X509Certificate, createHash } from 'node:crypto';
 import { DEFAULT_ALLOWED_ALGS, type JwsAlg } from '../crypto.ts';
+import type { TtlCache } from '../fetching.ts';
 import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
 import { type PathValidationOptions, resolveIssuerCertificateChain } from '../trust/issuer-key.ts';
+import { type StatusListReference, checkStatusList } from '../trust/status.ts';
 import { decode, decodeEmbedded, encodeTag24, entriesOf, get, toBytes, untag } from './cbor.ts';
 import { coseAlg, coseX5Chain, parseCoseSign1, verifyCoseSign1 } from './cose.ts';
 
@@ -20,6 +22,7 @@ import { coseAlg, coseX5Chain, parseCoseSign1, verifyCoseSign1 } from './cose.ts
  *   - that chain, against the caller's trust anchors
  *   - every disclosed element against its digest in the MSO
  *   - the MSO's own validity window and doc type
+ *   - the MSO's status reference, against the issuer's Token Status List
  *
  * Device authentication is separate — see `verifyDeviceResponse`.
  */
@@ -40,6 +43,25 @@ export type MdocVerifyOptions = {
    * because a validity window that cannot be read is not a validity window.
    */
   tolerateMalformedValidityDates?: boolean;
+  /**
+   * Check the MSO's status list. On by default, matching `verifyCredential`:
+   * an mdoc carrying a status reference we do not check is one we might be
+   * accepting after revocation. The EU reference issuer populates it — see
+   * `test/fixtures/real/`. Requires network access to the issuer's status
+   * endpoint, so tests that must stay offline turn it off explicitly.
+   */
+  checkStatus?: boolean;
+  /** Injectable fetch for status list retrieval, for tests. */
+  statusFetch?: typeof fetch;
+  /**
+   * Shared status list cache. Strongly recommended in a service: without one,
+   * every verification refetches a document that covers many credentials.
+   */
+  statusCache?: TtlCache<string>;
+  /** Abort a status list request after this long. */
+  statusTimeoutMs?: number;
+  /** Tolerance for clock differences with the issuer, in seconds. */
+  clockSkewSeconds?: number;
 };
 
 export type VerifiedMdoc = {
@@ -142,6 +164,33 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
   const claims = checkDigests(issuerSigned, get(mso, 'valueDigests'), nodeDigest);
   if (!claims.verified) return claims;
 
+  // Last, and only once everything local has passed: it is the one step that
+  // reaches the network, and a credential that fails any check above does not
+  // need a status lookup to be rejected.
+  if (options.checkStatus ?? true) {
+    const reference = readStatusReference(get(mso, 'status'));
+    if (!reference.verified) return reference;
+
+    if (reference.value) {
+      const outcome = await checkStatusList(reference.value, {
+        anchors: options.anchors,
+        now,
+        ...(options.statusFetch ? { fetchImpl: options.statusFetch } : {}),
+        ...(options.statusCache ? { cache: options.statusCache } : {}),
+        ...(options.statusTimeoutMs ? { timeoutMs: options.statusTimeoutMs } : {}),
+        ...(options.clockSkewSeconds ? { clockSkewSeconds: options.clockSkewSeconds } : {}),
+      });
+      if (outcome.kind === 'revoked') {
+        return reject('CREDENTIAL_REVOKED', `The issuer has revoked this credential (status ${outcome.status})`);
+      }
+      // Fails closed, as on the SD-JWT VC path: a status list we could not
+      // check is not a status list that said valid.
+      if (outcome.kind === 'unavailable') {
+        return reject('STATUS_UNAVAILABLE', outcome.detail);
+      }
+    }
+  }
+
   return accept({
     docType,
     claims: claims.value,
@@ -153,6 +202,40 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
       validUntil: validity.validUntil,
     },
   });
+}
+
+/**
+ * The MSO's status reference, if it carries one.
+ *
+ * `undefined` means the issuer published no revocation mechanism for this
+ * credential, which is nothing to check. It is not the same as a `status`
+ * element we cannot read: an issuer that said how to revoke, in terms we do not
+ * implement, has not told us this credential is still valid. That fails closed,
+ * on the same reasoning as an unevaluable Name Constraint failing the chain.
+ *
+ * `identifier_list` — which the EU reference issuer publishes alongside
+ * `status_list` — is such a mechanism. When both are present the status list
+ * settles it and the identifier list is not consulted.
+ */
+function readStatusReference(status: unknown): Outcome<StatusListReference | undefined> {
+  if (status === undefined || status === null) return accept(undefined);
+
+  const statusList = get(status, 'status_list');
+  if (statusList === undefined) {
+    const mechanisms = entriesOf(status).map(([key]) => String(key));
+    return reject(
+      'STATUS_UNAVAILABLE',
+      `MSO carries a status element with no status_list (${mechanisms.join(', ') || 'empty'}), and no other mechanism is implemented`,
+    );
+  }
+
+  const uri = get(statusList, 'uri');
+  const index = get(statusList, 'idx');
+  if (typeof uri !== 'string' || typeof index !== 'number') {
+    return reject('CREDENTIAL_MALFORMED', 'MSO status_list is missing a string uri or a numeric idx');
+  }
+
+  return accept({ uri, index });
 }
 
 /**
