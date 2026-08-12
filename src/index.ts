@@ -30,6 +30,7 @@ export type { AgeEvidence } from './predicate/age.ts';
 export { TrustAnchors } from './trust/anchors.ts';
 export type { GrantedInterval, TrustServiceEntry } from './trust/anchors.ts';
 export {
+  checkTrustListFreshness,
   fetchTrustAnchors,
   parsePointers,
   parseServiceCertificates,

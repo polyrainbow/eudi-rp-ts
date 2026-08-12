@@ -132,6 +132,7 @@ deploy it as-is; use the library inside your own service.
 | `LOTL_URL` | EU LOTL | Trust list to fetch for `lotl`. |
 | `LOTL_TERRITORIES` | all | e.g. `DE,AT`. All 42 lists is ~20 MB and slow. |
 | `LOTL_SERVICE_TYPES` | all | e.g. `http://uri.etsi.org/TrstSvc/Svctype/CA/QC`. |
+| `LOTL_INSECURE_SKIP_FRESHNESS_CHECK` | `false` | Accept a trust list past its own `NextUpdate`, or declaring none. A stale list still grants services withdrawn since. Only for development, or when a missed republication upstream would otherwise be your outage. |
 
 **Pointing at a different wallet**: change `WALLET_SCHEME`. **A different trust
 list**: `LOTL_URL` plus `LOTL_SERVICE_TYPES`.
@@ -185,7 +186,9 @@ freshness; Token Status List revocation **for both credential formats**,
 including verifying the status list token's own signature against the same trust
 anchors, that its `sub` is the URI the credential named, and that it has not
 expired; SD-JWT digests and
-disclosures (RFC 9901); SD-JWT VC media types
+disclosures (RFC 9901); trust list freshness, in that a list past its own
+`NextUpdate` — or declaring none — is refused rather than replayed (see below);
+SD-JWT VC media types
 `dc+sd-jwt` and transitional `vc+sd-jwt` (draft-18); OID4VP 1.0 request and
 response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 `sd_hash`, `nonce`, and `aud` equal to the full prefixed Client Identifier
@@ -200,10 +203,10 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
   revocation by CRL or OCSP (see below). Not checked: KeyUsage bits and
   certificate policies — Node's `X509Certificate` exposes *extended* key usage
   but not the KeyUsage bit string, so enforcing those means parsing DER by hand.
-- **Trust lists are not fully TS 119 615.** Service status history and
-  validity-time evaluation *are* implemented (see below). Not implemented: no
-  qualifier processing, no `Sie` extensions, and no use of the list's own issue
-  date or next-update.
+- **Trust lists are not fully TS 119 615.** Service status history,
+  validity-time evaluation and the list's own issue date and next-update *are*
+  implemented (see below). Not implemented: no qualifier processing and no `Sie`
+  extensions.
 - **Sessions are in memory** in the demo app. Restarting drops them, and more
   than one instance breaks them. The library holds no state.
 - **ES256 only**, matching what the reference issuer advertises.
@@ -276,6 +279,47 @@ Two details the real lists forced:
   `StatusStartingTime`; ordering the two by time gives the live entry a
   zero-length interval and drops the service. That cost 14 real anchors before
   it was pinned by a test.
+
+### Trust list freshness
+
+A signature says *who* wrote a list, never *when*. Every list here is fetched
+from a location named by another document, and a national list may arrive over
+plain http (Slovakia publishes one), so a signed copy from last year verifies
+exactly as well as today's — while still granting every service withdrawn since,
+which is the point of withdrawing them. Nothing about a valid XML signature
+distinguishes the two.
+
+TS 119 612 §5.3.13 gives each list a `ListIssueDateTime` and a `NextUpdate`, and
+`checkTrustListFreshness` treats them exactly as `revocation.ts` treats a CRL's
+`thisUpdate` and `nextUpdate`:
+
+- **Past `NextUpdate`** — refused. The replay window becomes the publisher's own
+  republication interval instead of forever. Measured on 2026-08-12: every live
+  list republishes on a six-month cadence (median 183 days from issue to next
+  update), and none was overdue.
+- **No `NextUpdate` at all** — refused, because there is then nothing to bound
+  freshness with. Measured cost: **one list**, the United Kingdom's, which
+  declares an empty `<NextUpdate/>`, was issued `2020-12-31T22:59:59Z` and has
+  not moved since withdrawal from the EU. A list nobody maintains is the case
+  this rule is for.
+- **Issued in the future** — refused.
+
+A lapsed *national* list costs that territory its anchors and nothing else; it
+is reported in `failures`, never dropped silently. A lapsed **LOTL** fails the
+whole fetch before its pointers are read, because a stale root names both where
+the national lists live and which certificates authenticate them.
+
+`TrustListResult.validUntil` carries the earliest `NextUpdate` across every list
+used, because a service holding an anchor set between refreshes needs the same
+answer: past that instant, what is in memory is precisely the stale copy this
+check refuses on the way in. The demo app uses it to answer `503` at
+`POST /presentations` rather than let verification fail — anchors we can no
+longer confirm produce a rejection that reads as "your credential is not
+trusted", which blames the holder for our own housekeeping.
+
+Not covered: replay of an older but *still fresh* list. Catching that means
+remembering the highest `TSLSequenceNumber` per list across restarts, which is
+persistent state the library deliberately does not hold.
 
 ## mdoc
 

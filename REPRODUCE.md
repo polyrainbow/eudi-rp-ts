@@ -304,6 +304,55 @@ The current entry is republished as a history instance with an identical
 zero-length interval and drops the service. `ServiceInformation` is the status
 in effect by definition rather than by timestamp, and a test pins it.
 
+### Trust list freshness: what the lists declare about themselves, 2026-08-12
+
+Refusing a list past its own `NextUpdate` is only defensible if the live lists
+publish one and keep it current, and refusing a list that declares *none* is
+only defensible if the set that costs is the abandoned ones. Both were measured
+before the check was written, by reading `SchemeInformation` off every list the
+LOTL points at as XML:
+
+```
+$ node -e "…fetch the LOTL, parsePointers, fetch each list, read
+           SchemeInformation/{ListIssueDateTime,NextUpdate/dateTime,TSLSequenceNumber}…"
+
+LOTL   issued 2026-08-03T13:16:38Z  nextUpdate 2027-01-27T13:16:38Z  seq 390
+national lists pointed at as XML: 31   fetched: 29   (IE, PT did not answer)
+
+missing ListIssueDateTime:            0
+NextUpdate element absent:            0
+NextUpdate present but empty:         1   <- UK
+already past their NextUpdate:        0
+issue age (days):        min 1.1 (SK)   median 57.7   max 2049.4 (UK)
+issue -> nextUpdate:     min 92.0 (PL)  median 183.0  max 184.0
+```
+
+Three things follow.
+
+**The cadence is six months.** Every list but Poland's declares a window of
+roughly 183 days, Poland's 92. So refusing a lapsed list turns an unbounded
+replay window into one bounded by the publisher's own schedule, and does not
+require anyone to republish more often than they already do.
+
+**Nothing is currently overdue.** Not one of the 29 lists was past its
+`NextUpdate`, so the strict rule costs no territory today. The freshest was
+Slovakia's, republished 1.1 days earlier; the median list was 58 days old and
+comfortably inside its window.
+
+**The empty `NextUpdate` is the United Kingdom's, and only theirs.**
+
+```
+UK  issued=2020-12-31T22:59:59Z  age=2049.4d  nextUpdate=EMPTY  seq=25
+```
+
+`2020-12-31T22:59:59Z` is the moment of withdrawal from the EU. The list has
+been frozen for five years and declares no next update because there will not be
+one. Refusing a list whose freshness cannot be bounded therefore costs exactly
+one list, and it is the one that most needs refusing — the argument is the same
+shape as Name Constraints above, and it goes stale the same way, so
+`ecosystem-drift.test.ts` asserts that the set of unbounded lists is still
+exactly `['UK']` and fails loudly when it is not.
+
 ### Certificate revocation: what the reference PKI publishes, 2026-08-12
 
 Which of CRL and OCSP the EU reference infrastructure actually offers, checked
@@ -403,8 +452,10 @@ It watches: the PID Issuer CA still being the certificate committed in
 `anchors/`; the CRL still published and still inside its `nextUpdate`; no OCSP
 responder appearing; `/.well-known/jwt-vc-issuer` still refusing; and, across
 every national list, that no Name Constraint uses a form we do not implement,
-that no granted service omits `StatusStartingTime`, and that the anchor count
-has not collapsed.
+that no granted service omits `StatusStartingTime`, that the anchor count has
+not collapsed, and — for the freshness rule above — that every list still
+declares a `ListIssueDateTime`, that none has lapsed past its own `NextUpdate`,
+and that the lists declaring no `NextUpdate` at all are still exactly `['UK']`.
 
 Run on 2026-08-12:
 

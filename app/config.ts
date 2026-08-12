@@ -97,6 +97,9 @@ export function loadConfig(): Config {
       territories: (env('LOTL_TERRITORIES') ?? '').split(',').filter(Boolean),
       lotlSigningAnchorsPem: envPem('LOTL_SIGNING_ANCHORS'),
       insecureSkipSignatureCheck: env('LOTL_INSECURE_SKIP_SIGNATURE_CHECK') === 'true',
+      // A list past its own NextUpdate is a replayable list. Off only where a
+      // missed republication upstream would otherwise be a local outage.
+      insecureSkipFreshnessCheck: env('LOTL_INSECURE_SKIP_FRESHNESS_CHECK') === 'true',
     },
   };
 

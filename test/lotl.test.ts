@@ -7,6 +7,8 @@ import { TrustAnchors } from '../src/trust/anchors.ts';
 import { resolveIssuerKeyFromX5c } from '../src/trust/issuer-key.ts';
 import {
   XMLDSIG_ECDSA,
+  checkTrustListFreshness,
+  fetchTrustAnchors,
   parsePointers,
   parseServiceCertificates,
   parseTrustServices,
@@ -141,6 +143,217 @@ describe('trust list parsing', () => {
   it('honours the skip flag only when explicitly set', () => {
     // Guards the insecure escape hatch: it must do nothing unless asked.
     verifyTrustList(`<TrustServiceStatusList xmlns="${TSL}"/>`, { label: 'sample', skip: true });
+  });
+});
+
+/**
+ * A signature says who, never when.
+ *
+ * Every list here is fetched from a location named by another document, and a
+ * national list may arrive over plain http — so a signed copy from last year
+ * verifies exactly as well as today's, while still granting services that have
+ * been withdrawn since. `NextUpdate` is what bounds that, and it is treated as
+ * a CRL's is in `revocation.test.ts`: past it, or absent, the document is
+ * refused. See REPRODUCE.md for what the live lists publish.
+ */
+describe('trust list freshness', () => {
+  const NOW = new Date('2026-08-12T00:00:00Z');
+
+  type Header = { issued?: string | null; nextUpdate?: string | null; pointers?: string };
+
+  /**
+   * A `SchemeInformation` header as TS 119 612 §5.3 publishes it.
+   *
+   * `null` omits the element; `''` writes `<NextUpdate/>` with no `dateTime`,
+   * which is the form the United Kingdom's list actually uses.
+   */
+  function schemeXml({ issued, nextUpdate, pointers = '' }: Header = {}) {
+    const issuedIso = issued === undefined ? '2026-06-15T00:00:00Z' : issued;
+    const nextIso = nextUpdate === undefined ? '2026-12-15T00:00:00Z' : nextUpdate;
+    return `<SchemeInformation>
+      ${issuedIso === null ? '' : `<ListIssueDateTime>${issuedIso}</ListIssueDateTime>`}
+      ${nextIso === null ? '' : `<NextUpdate>${nextIso === '' ? '' : `<dateTime>${nextIso}</dateTime>`}</NextUpdate>`}
+      ${pointers}
+    </SchemeInformation>`;
+  }
+
+  const headerXml = (header: Header = {}) =>
+    `<TrustServiceStatusList xmlns="${TSL}">${schemeXml(header)}</TrustServiceStatusList>`;
+
+  it('accepts a list inside its own NextUpdate', () => {
+    checkTrustListFreshness(headerXml(), { now: NOW, label: 'sample' });
+  });
+
+  it('refuses a list past its NextUpdate', () => {
+    // The replay window becomes the publisher's republication interval — six
+    // months for every live list measured — instead of forever.
+    assert.throws(
+      () => checkTrustListFreshness(headerXml({ nextUpdate: '2026-08-11T23:59:59Z' }), {
+        now: NOW,
+        label: 'sample',
+      }),
+      /expired at 2026-08-11/,
+    );
+  });
+
+  it('refuses a list that declares no NextUpdate at all', () => {
+    // The United Kingdom's list publishes exactly this: `<NextUpdate/>` with no
+    // `dateTime`, issued 2020-12-31T22:59:59Z and untouched since withdrawal
+    // from the EU. A list nobody maintains is the case this rule is for, so
+    // costing that one list is the rule working rather than an argument against
+    // it — REPRODUCE.md records that it is the only one.
+    assert.throws(
+      () => checkTrustListFreshness(headerXml({ nextUpdate: '' }), { now: NOW, label: 'sample' }),
+      /states no NextUpdate/,
+    );
+    assert.throws(
+      () => checkTrustListFreshness(headerXml({ nextUpdate: null }), { now: NOW, label: 'sample' }),
+      /states no NextUpdate/,
+    );
+  });
+
+  it('refuses a list with no readable issue date', () => {
+    assert.throws(
+      () => checkTrustListFreshness(headerXml({ issued: null }), { now: NOW, label: 'sample' }),
+      /no readable ListIssueDateTime/,
+    );
+    assert.throws(
+      () => checkTrustListFreshness(headerXml({ issued: 'the fifteenth of June' }), {
+        now: NOW,
+        label: 'sample',
+      }),
+      /no readable ListIssueDateTime/,
+    );
+  });
+
+  it('refuses a list issued in the future', () => {
+    assert.throws(
+      () => checkTrustListFreshness(headerXml({ issued: '2026-09-01T00:00:00Z' }), {
+        now: NOW,
+        label: 'sample',
+      }),
+      /issued in the future/,
+    );
+  });
+
+  it('tolerates clock difference only up to the stated skew', () => {
+    const xml = headerXml({ nextUpdate: '2026-08-11T23:55:00Z' });
+    checkTrustListFreshness(xml, { now: NOW, clockSkewSeconds: 600, label: 'sample' });
+    assert.throws(
+      () => checkTrustListFreshness(xml, { now: NOW, clockSkewSeconds: 60, label: 'sample' }),
+      /expired at/,
+    );
+  });
+
+  it('refuses a document with no SchemeInformation to judge', () => {
+    assert.throws(
+      () => checkTrustListFreshness(`<TrustServiceStatusList xmlns="${TSL}"/>`, {
+        now: NOW,
+        label: 'sample',
+      }),
+      /no SchemeInformation/,
+    );
+  });
+
+  it('honours the skip flag only when explicitly set', () => {
+    // Same escape hatch as the signature check, and the same guard on it.
+    checkTrustListFreshness(headerXml({ nextUpdate: '2020-01-01T00:00:00Z' }), {
+      now: NOW,
+      label: 'sample',
+      skip: true,
+    });
+  });
+
+  /**
+   * The whole assembly, offline: a LOTL pointing at two national lists, one
+   * current and one lapsed. Signature checking is skipped because these lists
+   * are unsigned — what is under test is what freshness does to the result.
+   */
+  describe('applied to a whole trust list fetch', () => {
+    const LOTL_URL = 'https://lotl.test/eu-lotl.xml';
+    const CURRENT_URL = 'https://lists.test/current.xml';
+    const LAPSED_URL = 'https://lists.test/lapsed.xml';
+
+    const pointerXml = (territory: string, url: string) => `<OtherTSLPointer>
+        <TSLLocation>${url}</TSLLocation>
+        <AdditionalInformation>
+          <OtherInformation><TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType></OtherInformation>
+          <OtherInformation><SchemeTerritory>${territory}</SchemeTerritory></OtherInformation>
+          <OtherInformation><add:MimeType>application/vnd.etsi.tsl+xml</add:MimeType></OtherInformation>
+        </AdditionalInformation>
+      </OtherTSLPointer>`;
+
+    const nationalXml = (header: Header) =>
+      `<TrustServiceStatusList xmlns="${TSL}">${schemeXml(header)}<TrustServiceProviderList>
+        <TrustServiceProvider><TSPServices>${serviceXml(GRANTED, CA_QC, ANCHOR_B64)}</TSPServices></TrustServiceProvider>
+      </TrustServiceProviderList></TrustServiceStatusList>`;
+
+    const documents: Record<string, string> = {
+      [LOTL_URL]: `<TrustServiceStatusList xmlns="${TSL}" xmlns:add="${ADD}">${schemeXml({
+        nextUpdate: '2027-01-27T00:00:00Z',
+        pointers: `<PointersToOtherTSL>${pointerXml('XA', CURRENT_URL)}${pointerXml('XB', LAPSED_URL)}</PointersToOtherTSL>`,
+      })}</TrustServiceStatusList>`,
+      [CURRENT_URL]: nationalXml({ nextUpdate: '2026-12-15T00:00:00Z' }),
+      [LAPSED_URL]: nationalXml({ issued: '2025-06-15T00:00:00Z', nextUpdate: '2025-12-15T00:00:00Z' }),
+    };
+
+    // Every URL is served from the table, so a request for anything else is a
+    // test reaching the network — which the offline suite must never do.
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      const body = documents[url];
+      if (!body) throw new Error(`unexpected fetch: ${url}`);
+      return new Response(body, { headers: { 'content-type': 'application/vnd.etsi.tsl+xml' } });
+    };
+
+    const config = {
+      lotlUrl: LOTL_URL,
+      serviceTypes: [],
+      lotlSigningAnchorsPem: undefined,
+      insecureSkipSignatureCheck: true,
+    };
+
+    it('drops a lapsed list, keeps the rest, and says which', async () => {
+      const result = await fetchTrustAnchors(config, { fetchImpl, now: NOW });
+
+      assert.deepEqual(
+        result.sources.map((source) => source.territory),
+        ['XA'],
+      );
+      assert.equal(result.anchors.certificates.length, 1);
+      // The failure is reported, not silent: an anchor set quietly missing a
+      // territory looks exactly like one where that territory withdrew.
+      assert.equal(result.failures.length, 1);
+      assert.equal(result.failures[0]!.url, LAPSED_URL);
+      assert.match(result.failures[0]!.error, /expired at 2025-12-15/);
+    });
+
+    it('reports the earliest horizon across every list it used', async () => {
+      const result = await fetchTrustAnchors(config, { fetchImpl, now: NOW });
+
+      // The LOTL runs to 2027-01-27 and the national list to 2026-12-15. The
+      // set is only as current as its stalest part.
+      assert.equal(result.validUntil?.toISOString(), '2026-12-15T00:00:00.000Z');
+      assert.equal(result.sources[0]!.issued?.toISOString(), '2026-06-15T00:00:00.000Z');
+    });
+
+    it('refuses to follow a LOTL that has lapsed, before reading its pointers', async () => {
+      const staleLotl: typeof fetch = async (input) =>
+        String(input) === LOTL_URL
+          ? new Response(
+              `<TrustServiceStatusList xmlns="${TSL}" xmlns:add="${ADD}">${schemeXml({
+                issued: '2025-06-15T00:00:00Z',
+                nextUpdate: '2025-12-15T00:00:00Z',
+                pointers: `<PointersToOtherTSL>${pointerXml('XA', CURRENT_URL)}</PointersToOtherTSL>`,
+              })}</TrustServiceStatusList>`,
+            )
+          : assert.fail('a lapsed LOTL must not be followed to its national lists');
+
+      await assert.rejects(
+        () => fetchTrustAnchors(config, { fetchImpl: staleLotl, now: NOW }),
+        /expired at 2025-12-15/,
+      );
+    });
   });
 });
 

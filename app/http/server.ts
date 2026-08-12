@@ -23,8 +23,14 @@ const PAGE = readFileSync(fileURLToPath(new URL('../public/index.html', import.m
 /**
  * @param getAnchors called per request, so a refreshed trust list takes effect
  *   without a restart.
+ * @param options.trustUnusable asked before each new presentation; a string
+ *   means the anchor set can no longer be relied on, and why.
  */
-export function createVerifierServer(config: Config, getAnchors: TrustAnchors | (() => TrustAnchors)) {
+export function createVerifierServer(
+  config: Config,
+  getAnchors: TrustAnchors | (() => TrustAnchors),
+  options: { trustUnusable?: () => string | undefined } = {},
+) {
   const sessions = new SessionStore();
   const anchorsNow = typeof getAnchors === 'function' ? getAnchors : () => getAnchors;
   // One cache each for the process: a status list covers many credentials, and
@@ -50,6 +56,16 @@ export function createVerifierServer(config: Config, getAnchors: TrustAnchors | 
     }
 
     if (req.method === 'POST' && path === '/presentations') {
+      // Refuse here rather than let the verification fail later. Anchors we can
+      // no longer confirm produce a rejection that reads as "your credential is
+      // not trusted", which blames the holder for our own stale trust list;
+      // declining to ask the question says the true thing instead.
+      const unusable = options.trustUnusable?.();
+      if (unusable) {
+        json(res, 503, { error: 'trust_anchors_stale', detail: unusable });
+        return;
+      }
+
       const request = await buildAuthorizationRequest(config);
       const session = sessions.create({
         nonce: request.nonce,

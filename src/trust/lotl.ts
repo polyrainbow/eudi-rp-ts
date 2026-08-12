@@ -23,11 +23,11 @@ import { TrustAnchors, type TrustServiceEntry } from './anchors.ts';
  *         ServiceDigitalIdentity/DigitalId/X509Certificate
  *       ServiceHistory/ServiceHistoryInstance/{…the same, as it was before…}
  *
- * SIMPLIFIED — see README. We check the XML signature, and evaluate each
- * service's status *at a given instant* against its declared starting time and
- * status history. We do NOT implement the rest of the TS 119 615 algorithm: no
- * qualifier processing, no `Sie` service information extensions, and no use of
- * the list's own issue date or next-update.
+ * SIMPLIFIED — see README. We check the XML signature, the list's own freshness
+ * (`ListIssueDateTime` and `NextUpdate`), and evaluate each service's status *at
+ * a given instant* against its declared starting time and status history. We do
+ * NOT implement the rest of the TS 119 615 algorithm: no qualifier processing
+ * and no `Sie` service information extensions.
  */
 
 const TSL_NS = 'http://uri.etsi.org/02231/v2#';
@@ -124,14 +124,43 @@ export type TrustListOptions = {
   lotlSigningAnchorsPem: string | undefined;
   /** Never enable outside development. */
   insecureSkipSignatureCheck: boolean;
+  /**
+   * Accept a list that is past its own `NextUpdate`, or that declares none.
+   *
+   * Never enable outside development. It exists because the freshness rule
+   * depends on other people republishing on time: if the Commission or a Member
+   * State misses a republication, every deployment loses those anchors at once,
+   * and an operator who has weighed that against the replay risk needs a local
+   * remedy that does not involve waiting for a release.
+   */
+  insecureSkipFreshnessCheck?: boolean;
 };
 
 export type TrustListResult = {
   anchors: TrustAnchors;
   /** Lists that were fetched successfully, for the operator to see. */
-  sources: { territory: string; url: string; services: number }[];
+  sources: {
+    territory: string;
+    url: string;
+    services: number;
+    /** The list's own `ListIssueDateTime`, or undefined if unchecked. */
+    issued: Date | undefined;
+    /** The list's own `NextUpdate`, or undefined if unchecked. */
+    nextUpdate: Date | undefined;
+  }[];
   /** Lists that failed, with why. Failures are reported, never silent. */
   failures: { url: string; error: string }[];
+  /**
+   * When the earliest of these lists stops being current.
+   *
+   * A caller that holds this anchor set — every service does, between
+   * refreshes — needs the same answer the library gives itself: a set built
+   * from a list past its `NextUpdate` is exactly the stale copy
+   * `checkTrustListFreshness` refuses, so continuing to verify against it after
+   * this instant contradicts the check that produced it. Undefined only when
+   * freshness was not checked at all.
+   */
+  validUntil: Date | undefined;
 };
 
 export type Pointer = {
@@ -152,9 +181,10 @@ export type Pointer = {
  */
 export async function fetchTrustAnchors(
   config: TrustListOptions,
-  options: { territories?: string[]; fetchImpl?: typeof fetch } = {},
+  options: { territories?: string[]; fetchImpl?: typeof fetch; now?: Date } = {},
 ): Promise<TrustListResult> {
   const doFetch = options.fetchImpl ?? fetch;
+  const now = options.now ?? new Date();
   const lotlXml = await fetchText(doFetch, config.lotlUrl);
 
   const lotlAnchors = config.lotlSigningAnchorsPem
@@ -163,6 +193,14 @@ export async function fetchTrustAnchors(
   verifyTrustList(lotlXml, {
     ...(lotlAnchors ? { expectedCerts: [...lotlAnchors.certificates] } : {}),
     skip: config.insecureSkipSignatureCheck,
+    label: config.lotlUrl,
+  });
+  // Before the pointers are read, not after: a stale LOTL names both the
+  // locations of the national lists and the certificates that authenticate
+  // them, so following it would spread a replayed root through everything below.
+  const lotlFreshness = checkTrustListFreshness(lotlXml, {
+    now,
+    skip: config.insecureSkipFreshnessCheck ?? false,
     label: config.lotlUrl,
   });
 
@@ -191,9 +229,23 @@ export async function fetchTrustAnchors(
         skip: config.insecureSkipSignatureCheck,
         label: pointer.url,
       });
+      // A national list that has lapsed costs that territory's anchors and
+      // nothing else: the throw lands in `failures` below, where the operator
+      // sees which list it was and why.
+      const freshness = checkTrustListFreshness(xml, {
+        now,
+        skip: config.insecureSkipFreshnessCheck ?? false,
+        label: pointer.url,
+      });
       const parsed = parseTrustServices(xml, config.serviceTypes);
       services.push(...parsed);
-      sources.push({ territory: pointer.territory, url: pointer.url, services: parsed.length });
+      sources.push({
+        territory: pointer.territory,
+        url: pointer.url,
+        services: parsed.length,
+        issued: freshness?.issued,
+        nextUpdate: freshness?.nextUpdate,
+      });
     } catch (error) {
       failures.push({ url: pointer.url, error: error instanceof Error ? error.message : String(error) });
     }
@@ -206,7 +258,17 @@ export async function fetchTrustAnchors(
     );
   }
 
-  return { anchors: TrustAnchors.fromTrustServices(services), sources, failures };
+  // The earliest horizon among every list that contributed, the LOTL included:
+  // the set is only as current as its stalest part, and one Member State
+  // republishing does not renew another's.
+  const horizons = [lotlFreshness?.nextUpdate, ...sources.map((source) => source.nextUpdate)].filter(
+    (date): date is Date => date !== undefined,
+  );
+  const validUntil = horizons.length
+    ? new Date(Math.min(...horizons.map((date) => date.getTime())))
+    : undefined;
+
+  return { anchors: TrustAnchors.fromTrustServices(services), sources, failures, validUntil };
 }
 
 /** Verify a trust list's enveloped XML signature. */
@@ -244,6 +306,84 @@ export function verifyTrustList(
       throw new Error(`${options.label}: signed by an unexpected certificate (${actual.subject})`);
     }
   }
+}
+
+/**
+ * Refuse a trust list that is not current.
+ *
+ * A signature proves who wrote a list, never when. Every list here is fetched
+ * from a location named by another document and — for the national lists — may
+ * arrive over plain http (see `NATIONAL_LIST_PROTOCOLS`), so a signed copy from
+ * last year verifies exactly as well as today's. The difference is what it
+ * grants: a service withdrawn since is still granted by the old list, which is
+ * the whole point of withdrawing it.
+ *
+ * TS 119 612 §5.3.13 gives each list the two fields needed to bound that, and
+ * this treats them as `src/trust/revocation.ts` treats a CRL's `thisUpdate` and
+ * `nextUpdate` — the same problem, and the same answer:
+ *
+ *  - past `NextUpdate` — refused. The replay window becomes the publisher's own
+ *    republication interval, which is six months for every list measured
+ *    (REPRODUCE.md) rather than unbounded.
+ *  - **no** `NextUpdate` — refused, because freshness cannot be bounded at all.
+ *    ETSI requires the element and every live list carries it; exactly one
+ *    leaves it *empty*, and it is the United Kingdom's, frozen at
+ *    2020-12-31T22:59:59Z on withdrawal from the EU. So the strict reading
+ *    costs one list that has been unmaintained for five years — which is the
+ *    case the rule is for, not a case against it.
+ *  - issued in the future — refused, as a document that cannot be describing
+ *    the present.
+ *
+ * Not covered: replay of an *older but still fresh* list. Catching that means
+ * remembering the highest `TSLSequenceNumber` seen per list across restarts,
+ * which is persistent state this library deliberately does not hold.
+ *
+ * Returns the two dates rather than only throwing, because a caller holding the
+ * resulting anchors needs to know how long they remain defensible — see
+ * `TrustListResult.validUntil`. `undefined` is returned only when the check was
+ * skipped, so a caller cannot mistake "not checked" for "fresh forever".
+ */
+export function checkTrustListFreshness(
+  xml: string,
+  options: { now?: Date; clockSkewSeconds?: number; skip?: boolean; label: string },
+): { issued: Date; nextUpdate: Date } | undefined {
+  if (options.skip) return undefined;
+
+  const now = options.now ?? new Date();
+  const skew = (options.clockSkewSeconds ?? 0) * 1000;
+  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  // Anchored at the root rather than `//`: `SchemeInformation` is where the
+  // list describes *itself*, and a descendant search would be satisfied by any
+  // element of that name a future schema nests somewhere else.
+  const scheme = first(select('/tsl:TrustServiceStatusList/tsl:SchemeInformation', doc as unknown as Node));
+  if (!scheme) throw new Error(`${options.label}: no SchemeInformation, so its freshness cannot be judged`);
+
+  const issued = new Date(text(first(select('./tsl:ListIssueDateTime', scheme))));
+  if (Number.isNaN(issued.getTime())) {
+    throw new Error(`${options.label}: no readable ListIssueDateTime`);
+  }
+  if (issued.getTime() - skew > now.getTime()) {
+    throw new Error(`${options.label}: issued in the future (${issued.toISOString()})`);
+  }
+
+  const nextUpdateText = text(first(select('./tsl:NextUpdate/tsl:dateTime', scheme)));
+  if (!nextUpdateText) {
+    throw new Error(
+      `${options.label}: states no NextUpdate (issued ${issued.toISOString()}), ` +
+        'so its freshness cannot be bounded',
+    );
+  }
+  const nextUpdate = new Date(nextUpdateText);
+  if (Number.isNaN(nextUpdate.getTime())) {
+    throw new Error(`${options.label}: NextUpdate is not a readable date (${nextUpdateText})`);
+  }
+  if (now.getTime() - skew > nextUpdate.getTime()) {
+    throw new Error(
+      `${options.label}: expired at ${nextUpdate.toISOString()} (issued ${issued.toISOString()})`,
+    );
+  }
+
+  return { issued, nextUpdate };
 }
 
 export function parsePointers(xml: string): Pointer[] {
@@ -403,9 +543,10 @@ const TRUST_LIST_MAX_BYTES = 20_000_000;
  *
  * What they *can* still do is replay an older signed copy, and a stale list may
  * still grant a service that has since been withdrawn. That residual risk is
- * the price of Slovakia being in the set at all, and it is bounded by nothing
- * here today — this implementation does not evaluate list issue dates (see
- * "Trust lists are not fully TS 119 615" in the README).
+ * the price of Slovakia being in the set at all, and `checkTrustListFreshness`
+ * bounds it: a replayed copy is refused once it passes the `NextUpdate` the
+ * publisher itself declared. What remains is replay of a copy still inside that
+ * window — six months, for every list measured.
  *
  * The LOTL keeps the https-only default because it is the root: it is where
  * both the locations and the signing certificates come from, so an attacker who

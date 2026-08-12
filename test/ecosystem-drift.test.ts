@@ -4,7 +4,12 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { TrustAnchors } from '../src/trust/anchors.ts';
-import { parsePointers, parseTrustServices, verifyTrustList } from '../src/trust/lotl.ts';
+import {
+  checkTrustListFreshness,
+  parsePointers,
+  parseTrustServices,
+  verifyTrustList,
+} from '../src/trust/lotl.ts';
 import { readNameConstraints } from '../src/trust/name-constraints.ts';
 import { checkChainRevocation, readOcspResponders } from '../src/trust/revocation.ts';
 
@@ -153,6 +158,9 @@ describe('the live trusted lists', { skip }, () => {
   it('still support every assumption the trust code makes', async (t) => {
     const lotlXml = await (await fetch(EU_LOTL)).text();
     verifyTrustList(lotlXml, { label: 'EU LOTL' });
+    // The root's own freshness. If this throws, every deployment following the
+    // LOTL has already lost every anchor, so it is the first thing to know.
+    checkTrustListFreshness(lotlXml, { label: 'EU LOTL' });
 
     const pointers = parsePointers(lotlXml).filter(
       (pointer) =>
@@ -173,6 +181,9 @@ describe('the live trusted lists', { skip }, () => {
     let grantedServices = 0;
     let missingStartingTime = 0;
     let identifiedWithoutCertificate = 0;
+    const missingIssueDate: string[] = [];
+    const unbounded: string[] = [];
+    const lapsed: string[] = [];
     const unimplementedForms = new Set<string>();
     const anchors: X509Certificate[] = [];
     const unreachable: string[] = [];
@@ -187,6 +198,18 @@ describe('the live trusted lists', { skip }, () => {
       }
 
       const document = new DOMParser().parseFromString(xml, 'text/xml');
+
+      // Freshness, read straight from the document for the same reason as the
+      // rest of this loop: what the parser accepted and what is published are
+      // different questions, and only the second one is drift.
+      const issued = text(one(select('//tsl:SchemeInformation/tsl:ListIssueDateTime', document as unknown as Node)));
+      const nextUpdate = text(one(select('//tsl:SchemeInformation/tsl:NextUpdate/tsl:dateTime', document as unknown as Node)));
+      if (!issued) missingIssueDate.push(pointer.territory);
+      if (!nextUpdate) unbounded.push(pointer.territory);
+      else if (new Date(nextUpdate).getTime() < Date.now()) {
+        lapsed.push(`${pointer.territory} (${nextUpdate})`);
+      }
+
       for (const service of select('//tsl:TSPService', document as unknown as Node) as Node[]) {
         const info = one(select('./tsl:ServiceInformation', service));
         if (!info || text(one(select('./tsl:ServiceStatus', info))) !== GRANTED) continue;
@@ -254,6 +277,36 @@ describe('the live trusted lists', { skip }, () => {
       news(
         `A CA on a trusted list now carries a Name Constraint in a form this project does not implement: ${[...unimplementedForms].join(', ')}`,
         'chains under that CA now fail closed with ISSUER_NAME_NOT_PERMITTED. Implement the form in src/trust/name-matching.ts — the "costs nothing today" argument in README "Name Constraints" no longer holds.',
+      ),
+    );
+
+    // The freshness rule refuses a list that declares no NextUpdate, and that is
+    // defensible only while the set it costs is the unmaintained ones. On
+    // 2026-08-12 it was exactly the United Kingdom's, frozen at 2020-12-31.
+    assert.deepEqual(
+      unbounded,
+      ['UK'],
+      news(
+        `Lists declaring no NextUpdate are now [${unbounded.join(', ') || 'none'}], not [UK].`,
+        'each of those territories has just dropped out of the anchor set. If a maintained list has stopped declaring one, the "costs one defunct list" argument in src/trust/lotl.ts no longer holds and the rule needs revisiting; if UK has vanished from the LOTL instead, only this expectation is stale.',
+      ),
+    );
+
+    assert.deepEqual(
+      missingIssueDate,
+      [],
+      news(
+        `${missingIssueDate.length} list(s) are published without a ListIssueDateTime: ${missingIssueDate.join(', ')}`,
+        'those lists are refused outright by checkTrustListFreshness. ETSI requires the field, so this is upstream breakage worth reporting before it is worked around.',
+      ),
+    );
+
+    assert.deepEqual(
+      lapsed,
+      [],
+      news(
+        `${lapsed.length} list(s) are past their own NextUpdate: ${lapsed.join(', ')}`,
+        'those territories are now absent from the anchor set, failing closed, and credentials issued under them are rejected. Nothing here is broken — the Member State has missed a republication. Check whether it recovers before considering LOTL_INSECURE_SKIP_FRESHNESS_CHECK.',
       ),
     );
   });
