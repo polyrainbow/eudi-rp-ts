@@ -101,5 +101,14 @@ export { noopSink } from './events.ts';
 export type { EventSink, VerificationEvent } from './events.ts';
 
 // Primitives, exported because a caller supplying their own callbacks needs them.
-export { DEFAULT_ALLOWED_ALGS, SUPPORTED_JWS_ALGS, isSupportedAlg, verifyJws } from './crypto.ts';
+export {
+  DEFAULT_ALLOWED_ALGS,
+  MIN_RSA_MODULUS_BITS,
+  SUPPORTED_JWS_ALGS,
+  importPublicJwk,
+  isSupportedAlg,
+  keyUnusableFor,
+  unsupportedKeyReason,
+  verifyJws,
+} from './crypto.ts';
 export type { JwsAlg } from './crypto.ts';

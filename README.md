@@ -17,7 +17,7 @@ Node runs the TypeScript as-is.
 
 ```bash
 npm install
-npm test                      # 209 tests, fully offline
+npm test                      # 257 tests, fully offline
 RUN_NETWORK_TESTS=1 npm test  # also verifies the live EU trust lists
 npm start                     # http://localhost:3000
 ```
@@ -62,7 +62,7 @@ file that touches `process.env`.
 ```
 src/index.ts              the public API — anything else is a deep import
 src/result.ts             ReasonCode and the Outcome type
-src/crypto.ts             ES256 allowlist, JWS verification, hashing
+src/crypto.ts             algorithm policy, JWS verification, hashing
 src/verify.ts             credential verification, orchestration
 src/predicate/age.ts      age_equal_or_over["18"], birthdate
 src/trust/anchors.ts      the trust anchor set
@@ -132,6 +132,7 @@ deploy it as-is; use the library inside your own service.
 | `LOTL_URL` | EU LOTL | Trust list to fetch for `lotl`. |
 | `LOTL_TERRITORIES` | all | e.g. `DE,AT`. All 42 lists is ~20 MB and slow. |
 | `LOTL_SERVICE_TYPES` | all | e.g. `http://uri.etsi.org/TrstSvc/Svctype/CA/QC`. |
+| `ALLOWED_ALGS` | `ES256` | Credential signature algorithms accepted, e.g. `ES256,PS256`. Advertised to the wallet and enforced on the response. |
 | `LOTL_INSECURE_SKIP_FRESHNESS_CHECK` | `false` | Accept a trust list past its own `NextUpdate`, or declaring none. A stale list still grants services withdrawn since. Only for development, or when a missed republication upstream would otherwise be your outage. |
 
 **Pointing at a different wallet**: change `WALLET_SCHEME`. **A different trust
@@ -208,7 +209,9 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
   extensions.
 - **Sessions are in memory** in the demo app. Restarting drops them, and more
   than one instance breaks them. The library holds no state.
-- **ES256 only**, matching what the reference issuer advertises.
+- **ES256 by default** — the whole of the EUDI reference deployment. ECDSA on
+  three curves and RSA in six algorithms are implemented; widening the policy is
+  a deliberate act (see below).
 
 ### Name Constraints
 
@@ -240,6 +243,47 @@ Two deliberate positions:
 Measured against the live eIDAS trust lists on 2026-08-11: 2 of 1897 anchors
 carry the extension, using only `dNSName` and `iPAddress`. So failing closed on
 an unimplemented form costs nothing today — see REPRODUCE.md.
+
+### Signature algorithms
+
+Two separate questions, kept apart: what this **can** verify, and what a
+deployment **will** accept.
+
+Capability is `ES256`, `ES384`, `ES512`, `RS256`, `RS384`, `RS512`, `PS256`,
+`PS384` and `PS512`. Policy — `allowedAlgs`, or `ALLOWED_ALGS` in the demo — is
+`ES256` alone by default, because that is what the entire EUDI reference
+deployment uses: the PID document signer, the status list token and the wallet's
+key binding. The token's own `alg` is checked against the policy and never used
+to select the verification algorithm, which is how algorithm substitution
+attacks work.
+
+RSA is here because a chain does not terminate in that deployment; it terminates
+in eIDAS. Measured on 2026-08-12: **2013 of the 2305 certificates on the live
+trusted lists carry RSA keys, against 274 EC** (REPRODUCE.md). Verifying ECDSA
+alone meant an issuer could chain to a trusted qualified CA and still be
+unverifiable for signing the way most of eIDAS signs — and the refusal came from
+path validation, which rejected any non-EC leaf before an algorithm had even
+been named.
+
+Three details worth stating:
+
+- **The key must match the algorithm**, and a mismatch is `UNSUPPORTED_ALGORITHM`
+  rather than a bad signature. An RSA key offered for `ES256`, a P-256 key for
+  `ES384`, a 1024-bit RSA key (RFC 7518 §3.3 requires 2048; four such
+  certificates are published today), a brainpool curve JOSE has no algorithm for
+  (24 published): each is an unusable key, not a failed verification.
+- **`RS*` and `PS*` are not interchangeable.** Both are "RSA with SHA-256"; the
+  padding is the whole difference, and reading the wrong one turns a good
+  signature into an invalid one. An `rsa-pss` key may not produce PKCS#1 at all
+  (RFC 4055), which is why an RSA access certificate signs with `PS256`.
+- **mdoc stays ECDSA-only.** ISO/IEC 18013-5 §9.1.3.4 permits only ECDSA and
+  EdDSA for issuer and device authentication, so the COSE identifiers for RSA
+  are deliberately left unmapped: an RSA-signed `issuerAuth` is outside the
+  standard rather than an interoperability case being refused.
+
+The policy is advertised to the wallet in `client_metadata.vp_formats_supported`
+and enforced when the presentation comes back, from one value — a verifier that
+advertises more than it accepts rejects wallets for answering what it asked for.
 
 ### Key usage
 
@@ -533,7 +577,7 @@ const result = await verifyCredential({
   credential, anchors, expectedVct: 'urn:eudi:pid:1', keyBinding,
 
   statusCache,                          // shared; see Revocation above
-  allowedAlgs: ['ES256'],               // policy, checked against the token's alg
+  allowedAlgs: ['ES256', 'PS256'],      // policy, checked against the token's alg
   pathValidation: { requiredExtendedKeyUsage: ['1.0.18013.5.1.2'] },
   onEvent: (event) => audit(event),     // structured, no personal data
 });

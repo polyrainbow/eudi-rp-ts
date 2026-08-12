@@ -2,7 +2,9 @@ import { Openid4vpVerifier } from '@openid4vc/openid4vp';
 import { exportJWK, generateKeyPair } from 'jose';
 import type { JWK } from 'jose';
 import { type VerifierIdentity, clientId, responseUri, verifierBaseUrl } from './identity.ts';
-import { createEncryptJwe, createSignJwt, generateRandom, hashCallback } from './callbacks.ts';
+import { DEFAULT_ALLOWED_ALGS } from '../crypto.ts';
+import { coseAlgIdentifiers } from '../mdoc/cose.ts';
+import { createEncryptJwe, createSignJwt, generateRandom, hashCallback, requestSigningAlg } from './callbacks.ts';
 import { ageOver18Query } from './query.ts';
 
 const b64url = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
@@ -52,6 +54,7 @@ export async function buildAuthorizationRequest(config: VerifierIdentity): Promi
   // belongs to before we can decrypt it.
   const responseId = b64url(generateRandom(16));
   const responseUrl = responseUri(config, responseId);
+  const allowedAlgs = config.allowedAlgs ?? DEFAULT_ALLOWED_ALGS;
   const signed = config.clientIdPrefix === 'x509_san_dns' || config.clientIdPrefix === 'x509_hash';
 
   // With direct_post.jwt the wallet encrypts the response to a key we publish
@@ -88,11 +91,18 @@ export async function buildAuthorizationRequest(config: VerifierIdentity): Promi
       // "Verifier does not support all Formats requested in the DCQL query".
       // Declaring only `dc+sd-jwt` while the query also offers `mso_mdoc` was
       // exactly that bug, so a test now pins the two together.
+      // Advertised from the policy that will actually be enforced, so a wallet
+      // is not told ES256 by a verifier configured to accept more, nor offered
+      // an algorithm the verification would then refuse.
       vp_formats_supported: {
-        'dc+sd-jwt': { 'sd-jwt_alg_values': ['ES256'], 'kb-jwt_alg_values': ['ES256'] },
+        'dc+sd-jwt': { 'sd-jwt_alg_values': [...allowedAlgs], 'kb-jwt_alg_values': [...allowedAlgs] },
         // COSE algorithm identifiers here, not JOSE names: -7 is ES256
-        // (RFC 9053 §2.1).
-        mso_mdoc: { issuerauth_alg_values: [-7], deviceauth_alg_values: [-7] },
+        // (RFC 9053 §2.1). Only the ECDSA subset appears, because that is all
+        // ISO 18013-5 permits for issuer and device authentication.
+        mso_mdoc: {
+          issuerauth_alg_values: [...coseAlgIdentifiers(allowedAlgs)],
+          deviceauth_alg_values: [...coseAlgIdentifiers(allowedAlgs)],
+        },
       },
       // Encryption is described by the JWK alone. `authorization_encrypted_
       // response_alg`/`_enc` are pre-1.0 JARM names and appear nowhere in
@@ -131,7 +141,14 @@ export async function buildAuthorizationRequest(config: VerifierIdentity): Promi
     ...(signed
       ? {
           jar: {
-            jwtSigner: { method: 'x5c', alg: 'ES256', x5c: pemChainToBase64Der(config.accessCertificateChainPem!) },
+            jwtSigner: {
+              method: 'x5c',
+              // Must be the algorithm `createSignJwt` will actually use: this
+              // value goes into the JAR header the wallet checks the signature
+              // against, so a mismatch is an unverifiable request object.
+              alg: requestSigningAlg(config.accessCertificatePrivateKeyPem!),
+              x5c: pemChainToBase64Der(config.accessCertificateChainPem!),
+            },
             expiresInSeconds: config.requestTtlSeconds,
             requestUri: `${verifierBaseUrl(config)}/oid4vp/request/${requestObjectId}`,
           } as never,

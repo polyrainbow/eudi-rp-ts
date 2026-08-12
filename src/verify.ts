@@ -6,8 +6,9 @@ import {
   decodeProtectedHeader,
   decodeUnverifiedPayload,
   hasher,
-  importEcJwk,
+  importPublicJwk,
   isSupportedAlg,
+  keyUnusableFor,
   verifyJws,
 } from './crypto.ts';
 import { type Outcome, accept, reject } from './result.ts';
@@ -199,6 +200,14 @@ export async function verifyCredential(
 
   const issuer = resolveIssuerKeyFromX5c(issuerJwt, options.anchors, now, options.pathValidation ?? {});
   if (!issuer.verified) return rejectWith(issuer);
+  // The certificate's key and the token's `alg` have been checked separately;
+  // this is the pair. Doing it here rather than inside the verifier callback is
+  // what keeps an RSA key offered for ES256 reported as UNSUPPORTED_ALGORITHM
+  // instead of as a bad signature.
+  const mismatch = keyUnusableFor(issuer.value.publicKey, alg);
+  if (mismatch) {
+    return rejectWith(reject('UNSUPPORTED_ALGORITHM', `Issuer key does not match the token: ${mismatch}`));
+  }
   emit({
     type: 'issuer.resolved',
     subject: issuer.value.leaf.subject,
@@ -223,6 +232,9 @@ export async function verifyCredential(
     // The same tolerance the credential's own `exp` gets, so the status list
     // and the credential are judged against one clock.
     ...(options.clockSkewSeconds ? { clockSkewSeconds: options.clockSkewSeconds } : {}),
+    // And the same algorithm policy, for the same reason: the status list is a
+    // second signed statement from the same issuer about the same credential.
+    allowedAlgs,
   });
 
   const sdjwt = new SDJwtVcInstance({
@@ -367,7 +379,7 @@ function holderKeyFrom(credential: string, allowed: readonly JwsAlg[]): KeyObjec
   try {
     const cnf = decodeUnverifiedPayload(issuerJwt)['cnf'];
     if (typeof cnf !== 'object' || cnf === null) return undefined;
-    return importEcJwk((cnf as Record<string, unknown>)['jwk'], allowed);
+    return importPublicJwk((cnf as Record<string, unknown>)['jwk'], allowed);
   } catch {
     return undefined;
   }

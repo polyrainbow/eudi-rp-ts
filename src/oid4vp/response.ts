@@ -175,6 +175,10 @@ async function verifySdJwt(
     ...(context.statusCache ? { statusCache: context.statusCache } : {}),
     checkCertificateRevocation: context.config.checkCertificateRevocation,
     ...(context.revocationCache ? { revocationCache: context.revocationCache } : {}),
+    // The policy the request advertised in client_metadata. Enforcing a
+    // narrower set than was advertised would reject a wallet for answering
+    // exactly what it was asked for.
+    ...(context.config.allowedAlgs ? { allowedAlgs: context.config.allowedAlgs } : {}),
     keyBinding: { nonce: context.nonce, audience },
   });
 
@@ -209,6 +213,7 @@ async function verifyMdocPresentation(
     ...(context.statusCache ? { statusCache: context.statusCache } : {}),
     checkCertificateRevocation: context.config.checkCertificateRevocation,
     ...(context.revocationCache ? { revocationCache: context.revocationCache } : {}),
+    ...(context.config.allowedAlgs ? { allowedAlgs: context.config.allowedAlgs } : {}),
   });
   if (!result.verified) return result;
 

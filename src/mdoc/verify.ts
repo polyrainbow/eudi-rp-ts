@@ -1,5 +1,5 @@
 import { X509Certificate, createHash } from 'node:crypto';
-import { DEFAULT_ALLOWED_ALGS, type JwsAlg } from '../crypto.ts';
+import { DEFAULT_ALLOWED_ALGS, type JwsAlg, keyUnusableFor } from '../crypto.ts';
 import type { TtlCache } from '../fetching.ts';
 import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
@@ -129,6 +129,11 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
   const trusted = resolveIssuerCertificateChain(chain, options.anchors, now, options.pathValidation ?? {});
   if (!trusted.verified) return trusted;
 
+  const mismatch = keyUnusableFor(trusted.value.leaf.publicKey, alg);
+  if (mismatch) {
+    return reject('UNSUPPORTED_ALGORITHM', `Document signer key does not match issuerAuth: ${mismatch}`);
+  }
+
   if (!verifyCoseSign1(sign1, trusted.value.leaf.publicKey, alg)) {
     return reject('ISSUER_SIGNATURE_INVALID', 'issuerAuth signature does not verify');
   }
@@ -191,6 +196,9 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
         ...(options.statusCache ? { cache: options.statusCache } : {}),
         ...(options.statusTimeoutMs ? { timeoutMs: options.statusTimeoutMs } : {}),
         ...(options.clockSkewSeconds ? { clockSkewSeconds: options.clockSkewSeconds } : {}),
+        // The status list is JOSE even when the credential is COSE, so the
+        // policy that reaches it is the caller's list, not the COSE subset.
+        allowedAlgs,
       });
       if (outcome.kind === 'revoked') {
         return reject('CREDENTIAL_REVOKED', `The issuer has revoked this credential (status ${outcome.status})`);

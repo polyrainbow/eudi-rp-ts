@@ -1,6 +1,14 @@
 import { inflateSync } from 'node:zlib';
 import type { KeyObject } from 'node:crypto';
-import { decodeProtectedHeader, decodeUnverifiedPayload, verifyEs256 } from '../crypto.ts';
+import {
+  DEFAULT_ALLOWED_ALGS,
+  type JwsAlg,
+  decodeProtectedHeader,
+  decodeUnverifiedPayload,
+  isSupportedAlg,
+  keyUnusableFor,
+  verifyJws,
+} from '../crypto.ts';
 import { DEFAULT_TIMEOUT_MS, TtlCache, fetchText } from '../fetching.ts';
 import type { TrustAnchors } from './anchors.ts';
 import { resolveIssuerKeyFromX5c } from './issuer-key.ts';
@@ -43,6 +51,17 @@ export type StatusCheckOptions = {
   cache?: TtlCache<string>;
   /** Tolerance for clock differences with the issuer, in seconds. */
   clockSkewSeconds?: number;
+  /**
+   * Signature algorithms the status list token may be signed with.
+   *
+   * The same policy the credential is held to, and for the same reason: this
+   * token is a second signed statement about the credential, from the same
+   * issuer, and a list nobody checked the algorithm of is a list an attacker
+   * chooses the algorithm for. It used to be hardcoded to ES256, which quietly
+   * refused any issuer whose list was signed with anything else — including
+   * issuers whose credentials this was configured to accept.
+   */
+  allowedAlgs?: readonly JwsAlg[];
 };
 
 /** Where a credential says its status bit lives. */
@@ -140,6 +159,14 @@ function inspectStatusListToken(
   // own status list.
   if (header['typ'] !== 'statuslist+jwt') {
     return `Status list typ is ${String(header['typ'])}`;
+  }
+
+  // Checked here, in the fetcher, for the reason given above: by the time the
+  // signature callback runs there is nowhere left to report it.
+  const allowed = options.allowedAlgs ?? DEFAULT_ALLOWED_ALGS;
+  const alg = header['alg'];
+  if (!isSupportedAlg(alg) || !allowed.includes(alg)) {
+    return `Status list alg ${String(alg)} is not in the allowed set (${allowed.join(', ')})`;
   }
 
   // The Status List Token's `sub` MUST equal the `uri` the credential pointed
@@ -256,14 +283,53 @@ export async function checkStatusList(
   if (!header || !payload || !signature) {
     return { kind: 'unavailable', detail: 'Status list is not a compact JWS' };
   }
-  if (!verifyEs256(signer.publicKey, `${header}.${payload}`, signature)) {
-    return { kind: 'unavailable', detail: 'Status list signature is not valid' };
-  }
+  const verification = verifyStatusListSignature(
+    token,
+    `${header}.${payload}`,
+    signature,
+    signer.publicKey,
+    options,
+  );
+  if (verification !== true) return { kind: 'unavailable', detail: verification };
 
   const status = readStatusAt(token, reference.index);
   if (!status.ok) return { kind: 'unavailable', detail: status.detail };
 
   return status.status === 0 ? { kind: 'valid' } : { kind: 'revoked', status: status.status };
+}
+
+/**
+ * Verify a status list token's signature under the algorithm it declares.
+ *
+ * The declared algorithm has already been checked against policy in
+ * `inspectStatusListToken`; re-reading it here rather than passing it along
+ * keeps the two callback paths — which reach this from different directions —
+ * from having to agree on how to carry it. Failures come back as a sentence
+ * because every caller here turns them into `STATUS_UNAVAILABLE` with a detail,
+ * and "the signer's key cannot be used with RS256" is a different operational
+ * problem from "the signature is wrong".
+ */
+function verifyStatusListSignature(
+  token: string,
+  signingInput: string,
+  signature: string,
+  publicKey: KeyObject,
+  options: StatusCheckOptions,
+): true | string {
+  const allowed = options.allowedAlgs ?? DEFAULT_ALLOWED_ALGS;
+  let alg: unknown;
+  try {
+    alg = decodeProtectedHeader(token)['alg'];
+  } catch {
+    return 'Status list header is not decodable';
+  }
+  if (!isSupportedAlg(alg) || !allowed.includes(alg)) {
+    return `Status list alg ${String(alg)} is not in the allowed set (${allowed.join(', ')})`;
+  }
+  const mismatch = keyUnusableFor(publicKey, alg);
+  if (mismatch) return `Status list signer's key does not match its alg: ${mismatch}`;
+
+  return verifyJws(publicKey, signingInput, signature, alg) ? true : 'Status list signature is not valid';
 }
 
 export function createStatusChecker(options: StatusCheckOptions): StatusChecker {
@@ -321,9 +387,12 @@ export function createStatusChecker(options: StatusCheckOptions): StatusChecker 
         return false;
       }
 
-      const ok = verifyEs256(signer.publicKey, data, signature);
-      if (!ok) outcome = { kind: 'unavailable', detail: 'Status list signature is not valid' };
-      return ok;
+      const verification = verifyStatusListSignature(fetched, data, signature, signer.publicKey, options);
+      if (verification !== true) {
+        outcome = { kind: 'unavailable', detail: verification };
+        return false;
+      }
+      return true;
     },
   };
 }

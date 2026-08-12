@@ -304,6 +304,54 @@ The current entry is republished as a history instance with an identical
 zero-length interval and drops the service. `ServiceInformation` is the status
 in effect by definition rather than by timestamp, and a test pins it.
 
+### What the ecosystem signs with, 2026-08-12
+
+Whether verifying ECDSA alone was a limitation or a policy, measured by reading
+the public key off every anchor the LOTL leads to:
+
+```
+$ node -e "…parse each anchor's key type with node:crypto…"
+
+unique anchors: 2305
+    983  rsa 2048        123  ec secp384r1
+    751  rsa 4096        103  ec prime256v1
+    270  rsa 3072         28  ec secp521r1
+      7  rsa-pss 2048     20  ec brainpoolP256r1
+      6  rsa-pss 4096      4  ec brainpoolP384r1
+      6  rsa 8192
+      4  rsa 1024
+
+CA anchors only (1055):  861 RSA, 184 EC, of which 602 are rsa 4096
+```
+
+**2013 of 2305 are RSA against 274 EC.** So refusing anything but ECDSA — which
+`resolveIssuerCertificateChain` did, before any algorithm had been named — made
+a chain terminating at a trusted qualified CA unverifiable whenever the issuer
+signed the way most of eIDAS signs.
+
+Two long tails matter, and both are refused with a stated reason rather than a
+failed signature:
+
+- **4 certificates carry 1024-bit RSA keys.** RFC 7518 §3.3 requires 2048 for
+  RS* and PS*, so the floor refuses something real.
+- **24 carry brainpool curves** (`brainpoolP256r1`, `brainpoolP384r1`). They are
+  valid X.509 and chain normally; JOSE simply has no algorithm to verify them
+  under, so they are reported as an unusable key.
+
+Against that, the EUDI reference deployment is uniformly ES256, which is why the
+default policy stayed narrow:
+
+```
+issuer.eudiw.dev advertised credential signing algs:  ES256, -7   (COSE ES256)
+proof signing alg values (jwt, attestation):          ES256
+committed SD-JWT VC header alg:                       ES256, DS key ec prime256v1
+its status list token:                                alg ES256, typ statuslist+jwt
+```
+
+`ecosystem-drift.test.ts` asserts that last block still holds: if the reference
+issuer starts advertising an algorithm the default policy does not include, the
+default has become too narrow for the deployment it was chosen for.
+
 ### Key usage across the trust lists and the reference PKI, 2026-08-12
 
 Whether requiring `keyCertSign` of every issuing certificate and

@@ -30,8 +30,36 @@ export type CoseSign1 = {
 const HEADER_ALG = 1;
 const HEADER_X5CHAIN = 33;
 
-/** COSE algorithm identifiers (IANA COSE Algorithms registry). */
+/**
+ * COSE algorithm identifiers (IANA COSE Algorithms registry).
+ *
+ * ECDSA only, deliberately, and unlike the JOSE side — which gained RSA because
+ * the eIDAS trusted lists are built on it. ISO/IEC 18013-5 §9.1.3.4 permits only
+ * ECDSA and EdDSA for issuer and device authentication, so an RSA-signed
+ * `issuerAuth` is not an interoperability case this is refusing; it is a
+ * document outside the standard. The registry entries exist (`PS256` is -37,
+ * `RS256` is -257) and are left unmapped, which makes the refusal a stated
+ * position rather than a gap: `coseAlg` returns undefined and the caller reports
+ * `UNSUPPORTED_ALGORITHM`.
+ *
+ * EdDSA is the half of the standard not implemented here. Nothing in the EUDI
+ * deployment uses it — the reference issuer advertises `-7` alone (REPRODUCE.md).
+ */
 const COSE_ALGS: Record<string, JwsAlg> = { '-7': 'ES256', '-35': 'ES384', '-36': 'ES512' };
+
+/**
+ * The COSE identifiers for those of `algs` that COSE can express.
+ *
+ * A verifier advertising `mso_mdoc` support has to name algorithms as numbers,
+ * and only the ECDSA ones have a mapping here — see `COSE_ALGS`. An allowlist
+ * of RSA algorithms therefore advertises nothing for mdoc, which is the honest
+ * answer rather than a silent translation into something ISO 18013-5 forbids.
+ */
+export function coseAlgIdentifiers(algs: readonly JwsAlg[]): number[] {
+  return Object.entries(COSE_ALGS)
+    .filter(([, alg]) => algs.includes(alg))
+    .map(([identifier]) => Number(identifier));
+}
 
 export function parseCoseSign1(value: unknown): CoseSign1 {
   const array = Array.isArray(value) ? value : undefined;

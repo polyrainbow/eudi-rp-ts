@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { DEFAULT_ALLOWED_ALGS, type JwsAlg, isSupportedAlg } from '../src/crypto.ts';
 import { type ClientIdPrefix, type VerifierIdentity, verifierBaseUrl } from '../src/oid4vp/identity.ts';
 import type { TrustListOptions } from '../src/trust/lotl.ts';
 
@@ -70,6 +71,20 @@ export function loadConfig(): Config {
     throw new Error(`CLIENT_ID_PREFIX must be one of ${prefixes.join(', ')}, got ${clientIdPrefix}`);
   }
 
+  // Advertised to the wallet and enforced on the way back, from one value.
+  // ES256 alone is what the EUDI reference deployment uses; most of eIDAS signs
+  // with RSA, so a verifier accepting issuers outside the pilot has to say so.
+  const allowedAlgs: readonly JwsAlg[] = (env('ALLOWED_ALGS') ?? '')
+    .split(',')
+    .map((alg) => alg.trim())
+    .filter(Boolean)
+    .map((alg) => {
+      if (!isSupportedAlg(alg)) {
+        throw new Error(`ALLOWED_ALGS contains ${alg}, which is not a supported JWS algorithm`);
+      }
+      return alg;
+    });
+
   const config: Config = {
     port,
     baseUrl,
@@ -89,6 +104,7 @@ export function loadConfig(): Config {
     // for an offline demo, or where the CA's CRL endpoint is unreachable.
     checkCertificateRevocation: env('CERT_REVOCATION_CHECK') !== 'false',
     tolerateMalformedMdocValidity: env('MDOC_TOLERATE_MALFORMED_VALIDITY') === 'true',
+    allowedAlgs: allowedAlgs.length > 0 ? allowedAlgs : DEFAULT_ALLOWED_ALGS,
     trust: {
       mode: (env('TRUST_MODE') ?? 'pinned') as TrustConfig['mode'],
       pinnedAnchorsPem: envPem('TRUST_ANCHORS'),

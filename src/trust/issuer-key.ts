@@ -1,5 +1,5 @@
 import { type KeyObject, X509Certificate } from 'node:crypto';
-import { decodeProtectedHeader } from '../crypto.ts';
+import { decodeProtectedHeader, unsupportedKeyReason } from '../crypto.ts';
 import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from './anchors.ts';
 import { readKeyUsage } from './key-usage.ts';
@@ -224,12 +224,13 @@ export function resolveIssuerCertificateChain(
     }
   }
 
-  if (leaf.publicKey.asymmetricKeyType !== 'ec') {
-    return reject(
-      'UNSUPPORTED_ALGORITHM',
-      `Issuer key is ${String(leaf.publicKey.asymmetricKeyType)}, expected an EC P-256 key`,
-    );
-  }
+  // Whether *some* supported algorithm could use this key. Which algorithm is
+  // acceptable is the caller's policy and the token's claim, checked together
+  // where the signature is — see `keyUnusableFor`. Rejecting anything but EC
+  // here, as this once did, ruled out the RSA keys 87% of the eIDAS trusted
+  // lists are built on before their algorithm was ever named.
+  const unusable = unsupportedKeyReason(leaf.publicKey);
+  if (unusable) return reject('UNSUPPORTED_ALGORITHM', `Issuer key cannot be used: ${unusable}`);
 
   return accept({ publicKey: leaf.publicKey, leaf, chain: fullChain });
 }

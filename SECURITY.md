@@ -17,6 +17,11 @@ about where it stops. Before relying on it for anything real, read
   rather than replayed. Qualifier processing and `Sie` extensions are not.
 - **Sessions are in memory**, so a restart drops them and more than one
   instance breaks them.
+- **The algorithm policy defaults to ES256**, which is what the EUDI reference
+  deployment uses and narrower than eIDAS at large. ECDSA on three curves and
+  RSA in six algorithms can be verified; accepting them is a deliberate
+  `allowedAlgs` decision, and the token's `alg` is never used to select the
+  verification algorithm.
 
 Revocation **is** checked, at both levels and failing closed at both: the
 credential, via Token Status List for SD-JWT VC and mdoc alike; and the issuer's

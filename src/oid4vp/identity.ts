@@ -1,4 +1,5 @@
 import { X509Certificate, createHash } from 'node:crypto';
+import type { JwsAlg } from '../crypto.ts';
 
 /**
  * Who this verifier is, on the wire.
@@ -37,6 +38,16 @@ export type VerifierIdentity = {
    * Fails closed, like `checkStatus`.
    */
   checkCertificateRevocation: boolean;
+  /**
+   * Credential signature algorithms this verifier accepts.
+   *
+   * Advertised to the wallet in `client_metadata.vp_formats_supported` and
+   * enforced when the presentation comes back, so the two cannot drift apart.
+   * Defaults to `DEFAULT_ALLOWED_ALGS` — ES256, what the EUDI reference
+   * infrastructure uses. Widen it to accept issuers outside that pilot; most of
+   * eIDAS signs with RSA.
+   */
+  allowedAlgs?: readonly JwsAlg[];
 };
 
 /**

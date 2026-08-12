@@ -46,6 +46,7 @@ const fixtureDir = fileURLToPath(new URL('./fixtures/real/', import.meta.url));
 
 const PID_ISSUER_CA_AIA = 'https://preprod.pki.eudiw.dev/aia/PIDIssuerCA02-UT.cacert.pem';
 const JWT_VC_ISSUER_METADATA = 'https://issuer.eudiw.dev/.well-known/jwt-vc-issuer';
+const CREDENTIAL_ISSUER_METADATA = 'https://issuer.eudiw.dev/.well-known/openid-credential-issuer';
 const EU_LOTL = 'https://ec.europa.eu/tools/lotl/eu-lotl.xml';
 
 /** Prefix every failure, so CI output says what kind of failure it is. */
@@ -145,6 +146,35 @@ describe('the reference issuer', { skip }, () => {
       news(
         `${JWT_VC_ISSUER_METADATA} now answers ${response.status}, where it returned 400 "Not supported".`,
         'issuer metadata key resolution is now possible; reconsider implementing it and update README "Open questions".',
+      ),
+    );
+  });
+
+  it('still signs everything with ES256', async () => {
+    // The default algorithm policy is ES256 because that is the whole of this
+    // deployment — credential, status list and proof alike. RSA and the larger
+    // curves are implemented but off by default, so the day the reference
+    // issuer advertises something else, every deployment on the defaults starts
+    // rejecting real credentials with UNSUPPORTED_ALGORITHM.
+    const metadata = (await (await fetch(CREDENTIAL_ISSUER_METADATA)).json()) as {
+      credential_configurations_supported?: Record<string, { credential_signing_alg_values_supported?: unknown[] }>;
+    };
+
+    const advertised = new Set<string>();
+    for (const config of Object.values(metadata.credential_configurations_supported ?? {})) {
+      for (const alg of config.credential_signing_alg_values_supported ?? []) advertised.add(String(alg));
+    }
+
+    // `-7` is COSE for ES256 (RFC 9053 §2.1), which is how the mdoc
+    // configurations name it.
+    const outsideTheDefault = [...advertised].filter((alg) => alg !== 'ES256' && alg !== '-7');
+
+    assert.deepEqual(
+      outsideTheDefault,
+      [],
+      news(
+        `The reference issuer now advertises credential signing algorithms outside the default policy: ${outsideTheDefault.join(', ')}`,
+        'DEFAULT_ALLOWED_ALGS no longer covers the deployment it was chosen for. Widen it in src/crypto.ts, or say in README "Signature algorithms" that ALLOWED_ALGS must now be set.',
       ),
     );
   });

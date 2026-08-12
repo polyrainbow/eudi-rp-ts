@@ -1,5 +1,5 @@
 import { type Outcome, accept, reject } from '../result.ts';
-import type { JwsAlg } from '../crypto.ts';
+import { DEFAULT_ALLOWED_ALGS, type JwsAlg } from '../crypto.ts';
 import type { TtlCache } from '../fetching.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
 import type { PathValidationOptions } from '../trust/issuer-key.ts';
@@ -158,7 +158,7 @@ async function verifyDeviceAuth(
   }
 
   const alg = coseAlg(sign1);
-  const allowed = options.allowedAlgs ?? ['ES256'];
+  const allowed = options.allowedAlgs ?? DEFAULT_ALLOWED_ALGS;
   if (!alg || !allowed.includes(alg)) {
     return reject('UNSUPPORTED_ALGORITHM', `Device signature alg is not in the allowed set`);
   }
