@@ -380,6 +380,25 @@ warn the user when a verifier asks for more.
 How both issuers and verifiers ship their certificates inline. Note the EU
 reference issuer puts *only the leaf* there. **(used here)**
 
+**Certificate policy** — an OID in a certificate (**RFC 5280 §4.2.1.4**) naming
+the rules a CA issued it under: identity proofing, key protection, audit. In
+eIDAS this is what separates a qualified certificate from an ordinary one —
+ETSI's qualified certificate policies live under the `0.4.0.194112.1` arc, the
+most common of the 512 distinct OIDs on the live trusted lists — and both can
+sit under the same trusted list entry, so the policy is the only thing
+distinguishing them. **anyPolicy** (`2.5.29.32.0`) is the wildcard. Validating
+one is not a lookup but a walk down the path: each CA may narrow the set, rename
+it into its own arc (**policy mapping**, §4.2.1.5), or require its successors to
+be explicit (**policy constraints**, §4.2.1.11). **(used here — the full RFC
+5280 §6.1 processing; which OIDs are acceptable is the caller's to name)**
+
+**Path length constraint** — the second field of `basicConstraints` (**RFC 5280
+§4.2.1.9**), saying how many further CA certificates may sit between this CA and
+an end entity. Zero means "I sign end-entity certificates only", which is what
+the EU PID Issuer CA and 692 of the 1165 CAs on the live trusted lists say.
+Distinct from a verifier's own cap on how long a chain it will look at.
+**(used here — both)**
+
 **AIA** — Authority Information Access, an X.509 extension (**RFC 5280
 §4.2.2.1**). Its *CA Issuers* URI is where you fetch an issuing CA that was not
 included in `x5c`; its *OCSP* URI names the responder to ask about the

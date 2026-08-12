@@ -67,6 +67,7 @@ src/verify.ts             credential verification, orchestration
 src/predicate/age.ts      age_equal_or_over["18"], birthdate
 src/trust/anchors.ts      the trust anchor set
 src/trust/issuer-key.ts   x5c resolution + chain validation   <- the part no library does
+src/trust/policy-tree.ts  RFC 5280 §6.1 certificate policy processing
 src/trust/lotl.ts         ETSI TS 119 612 trust list client   <- no Node implementation existed
 src/trust/status.ts       Token Status List revocation (the credential)
 src/trust/revocation.ts   CRL and OCSP                 (the issuer's certificates)
@@ -201,8 +202,14 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 - **Certificate path validation is partial.** Checked: validity windows,
   signature linkage, that every issuing certificate is a CA and asserts
   `keyCertSign`, that the leaf asserts `digitalSignature` (see below), path
-  length, an optional Extended Key Usage allowlist, Name Constraints (see below),
-  and revocation by CRL or OCSP (see below). Not checked: certificate policies.
+  length — the caller's limit *and* each CA's own `pathLenConstraint` (see
+  below) — an optional Extended Key Usage allowlist, Name Constraints (see
+  below), certificate policies as the full RFC 5280 §6.1 state machine (see
+  below), and revocation by CRL or OCSP (see below). Not checked: **a critical
+  extension this project does not recognise is ignored rather than rejected**,
+  where §6.1.4 (o) requires rejection. Measured on 2026-08-12, that is
+  `privateKeyUsagePeriod` on four certificates across the live lists
+  (REPRODUCE.md) — before certificate policies were implemented it was 78.
 - **Trust lists are not fully TS 119 615.** Service status history,
   validity-time evaluation and the list's own issue date and next-update *are*
   implemented (see below). Not implemented: no qualifier processing and no `Sie`
@@ -243,6 +250,84 @@ Two deliberate positions:
 Measured against the live eIDAS trust lists on 2026-08-11: 2 of 1897 anchors
 carry the extension, using only `dNSName` and `iPAddress`. So failing closed on
 an unimplemented form costs nothing today — see REPRODUCE.md.
+
+### Certificate policies
+
+A certificate policy (RFC 5280 §4.2.1.4) is a CA stating *under which rules* it
+issued: the identity proofing, the key protection, the audit regime. In eIDAS
+that is the load-bearing statement — an ETSI policy OID is what separates a
+qualified certificate from one a CA issued to anyone who asked, and both can sit
+under the same trusted list entry. 2336 of the 2439 service certificates on the
+live lists assert one, across 512 distinct OIDs (REPRODUCE.md).
+
+The check is not "does the leaf assert OID X". That would be a one-line test and
+it would be wrong, because a policy is only worth anything if every CA on the
+path authorised it. RFC 5280 §6.1 answers the real question with a
+`valid_policy_tree` and three counters, and all of it is implemented: policy
+mapping (`policyMappings`), the anyPolicy wildcard and its withdrawal
+(`inhibitAnyPolicy`), and a CA's demand that its successors be explicit
+(`policyConstraints`). The rejection is `ISSUER_POLICY_NOT_PERMITTED`, kept
+distinct from `ISSUER_UNTRUSTED` for the same reason as
+`ISSUER_NAME_NOT_PERMITTED`: the chain links and reaches an anchor, but not
+under any policy agreed the whole way down.
+
+```ts
+pathValidation: {
+  certificatePolicies: { acceptable: ['0.4.0.194112.1.2'] },
+}
+```
+
+Four positions worth stating:
+
+- **Naming policies means requiring them.** RFC 5280 §6.1.5 (g) succeeds on
+  `explicit_policy > 0` whatever the caller's policy set said, so under the
+  letter of the RFC a caller can name the policies it accepts and still be
+  handed a path that asserts none. Here `acceptable` implies
+  `requireExplicit`; pass `requireExplicit: false` for the RFC's own reading.
+- **Naming nothing is not the same as skipping the step.** With no options the
+  caller accepts any policy — but every certificate's own `policyConstraints`,
+  `inhibitAnyPolicy` and mappings are still processed, because those are the
+  CAs' demands and not the caller's. Eight CA certificates on the live lists
+  make one.
+- **The anchor's constraints bind; its assertions do not.** `policyConstraints`
+  and `inhibitAnyPolicy` on a trust anchor are folded into the initial state
+  (RFC 5937 §3.2), on the same reading as Name Constraints: a trust anchor that
+  constrains the paths beneath it means it. Its own `certificatePolicies` are
+  *not* read as the path's policy — §6.1 gives the anchor's position to a
+  root node of anyPolicy, and treating the anchor as the first certificate
+  would end the tree at every anchor that asserts nothing, which is 67 of the
+  1165 CAs on the live lists and the EU PID Issuer CA among them.
+- **A policy extension that cannot be read fails the chain**, like a Name
+  Constraint that cannot be read. All 2439 certificates on the live lists parse,
+  so this costs nothing today.
+
+There is no default `acceptable`, and that is deliberate: the EU reference PID
+signer asserts the placeholder `1.2.3.4` and the reference verifier signer
+`0.4.0.194118.1.2`, so the OID a deployment should demand is a property of the
+deployment rather than of this library.
+
+Because a state machine that agrees with its own tests proves little, the same
+chains are put to `openssl verify`, which implements §6.1 and exposes each
+initial input as a flag. `scripts/check-policy-tree.ts` compares the verdicts;
+all ten cases agree (REPRODUCE.md).
+
+### Path length
+
+`basicConstraints` carries two statements, and Node exposes one. `.ca` says a
+certificate may sign certificates; `pathLenConstraint` says how many further CAs
+may sit between it and an end entity, and reaching it means parsing the DER.
+
+It is not a theoretical gap: 692 of the 1165 CA certificates on the live trusted
+lists set it to **zero** — "I sign end-entity certificates only" — and the EU PID
+Issuer CA is one of them. Unread, a chain claiming any of those issued a sub-CA,
+which then vouches for any subject at all, validated on every other check.
+
+RFC 5280 §6.1.4 (l) and (m) as written: the anchor's own constraint applies to
+the path below it (RFC 5937 §3.2 again), a self-issued certificate does not spend
+a step because a CA re-keying itself is not a delegation, and the end
+certificate's own constraint is not read — it says what *it* may issue, which is
+a different question. `pathValidation.maxChainLength` is unrelated and still
+enforced: that one is the caller's limit, this one is each CA's.
 
 ### Signature algorithms
 

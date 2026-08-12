@@ -18,6 +18,15 @@ export type ReasonCode =
    * certify this name.
    */
   | 'ISSUER_NAME_NOT_PERMITTED'
+  /**
+   * No certificate policy (RFC 5280 §4.2.1.4) is valid for the whole path —
+   * either a CA on it required an explicit policy that a certificate below did
+   * not assert, or nothing survived the intersection with the policies the
+   * caller accepts. Distinct from `ISSUER_UNTRUSTED` for the same reason as
+   * `ISSUER_NAME_NOT_PERMITTED`: the chain links and reaches an anchor, but not
+   * under any policy that was agreed the whole way down.
+   */
+  | 'ISSUER_POLICY_NOT_PERMITTED'
   // Validity window
   | 'CREDENTIAL_EXPIRED'
   | 'CREDENTIAL_NOT_YET_VALID'

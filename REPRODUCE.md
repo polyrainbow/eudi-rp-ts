@@ -416,6 +416,161 @@ pins the table above beside the explicit check. What was genuinely unchecked is
 the **leaf**: nothing in the tree knew that key was about to verify a credential
 signature rather than a TLS handshake.
 
+### Certificate policies across the trust lists and the reference PKI, 2026-08-12
+
+Certificate policy processing (RFC 5280 §6.1) was written against what the live
+lists actually carry, measured by reading all four policy extensions off every
+service certificate the LOTL leads to:
+
+```
+$ node -e "…fetch the LOTL, parsePointers, parseTrustServices on each list,
+           then readCertificatePolicies / readPolicyMappings /
+           readPolicyConstraints / readInhibitAnyPolicy on every certificate…"
+
+lists: 29/31  unreachable: IE, PT
+certificates: 2439 (1165 CAs)
+  certificatePolicies: 2336 (1098 of the CAs)
+  distinct policy OIDs: 512      anyPolicy asserted: 625
+  unreadable: 0
+
+policyConstraints  IT  req=0  CN=Postecert per Camera dei Deputati, O=Postecom S.p.A.
+policyConstraints  IT  req=0  CN=Postecom CA1, O=Postecom s.p.a.
+policyConstraints  IT  req=0  CN=Postecom CA2, O=Postecom S.p.A.
+policyConstraints  IT  req=0  CN=Postecert per Regione Emilia-Romagna, O=Postecom s.p.a.
+policyConstraints  SK  req=0  CN=CAMOSR2, O=Ministry of Defence, C=SK
+policyConstraints  SK  req=0  CN=CAMOSR3, O=Ministry of Defence, C=SK
+policyConstraints  SK  req=0  CN=I.CA - Qualified Certification Authority, 09/2009, C=CZ
+policyConstraints  SK  req=0  CN=I.CA Qualified CA/RSA 07/2015, C=CZ
+
+policyMappings     SK  1.3.158.36061701.0.0.0.1.2.2 -> 0.4.0.1456.1.1
+                       1.3.158.36061701.0.0.0.1.2.2 -> 1.3.158.36061701.0.0.0.1.2.2
+                       (the same four CAs the Slovak list publishes, above)
+
+inhibitAnyPolicy   none on any list
+```
+
+The count is service *entries* that yielded a certificate, not unique
+certificates — 2439 against the 2305 unique anchors in the KeyUsage measurement
+above, the difference being the same certificate published by more than one
+service.
+
+Four things follow.
+
+**Policies are the norm, not the exception.** 2336 of 2439 certificates assert
+at least one, across 512 distinct OIDs. Ignoring the extension means ignoring
+what almost every CA in the ecosystem is saying about how it issued.
+
+**Every `policyConstraints` on the lists is `requireExplicitPolicy: 0`**, on
+eight CA certificates from two Member States, and none sets
+`inhibitPolicyMapping`. No certificate anywhere carries `inhibitAnyPolicy`. So
+the counters are exercised against fixtures rather than against live material —
+worth knowing when reading `test/certificate-policies.test.ts`.
+
+**Policy mapping is live infrastructure.** The four CAs on the Slovak list map a
+national policy arc onto `0.4.0.1456.1.1`. A verifier that asked for the EU OID
+and refused to follow the mapping would reject certificates those CAs say are
+equivalent — which is the case `inhibitMapping` exists to make deliberate.
+
+**Nothing on the lists is unreadable.** All 2439 parsed, so failing closed on a
+policy extension that cannot be read costs nothing today — the same measured
+argument as Name Constraints and KeyUsage.
+
+The reference PKI, read the same way:
+
+```
+anchors/eudiw-pid-issuer-ca.pem   no policy extension of any kind
+PID DS - 002 (SD-JWT VC x5c[0])   certificatePolicies: 1.2.3.4  (non-critical,
+                                    with a CPS qualifier, 1.3.6.1.5.5.7.2.1)
+PID DS - 002 (mdoc x5chain[0])    certificatePolicies: 1.2.3.4  (the same)
+Verifier Signer (access cert)     certificatePolicies: 0.4.0.194118.1.2
+```
+
+`1.2.3.4` is a placeholder OID, which is what a test deployment is entitled to
+publish. It is the reason `acceptable` has no default: the OID a deployment
+should demand is a property of the deployment, and hardcoding the reference
+issuer's would be pinning a placeholder. The anchor asserting nothing at all is
+why the trust anchor's own policies are not read as the path's — see README
+"Certificate policies".
+
+### Policy processing against OpenSSL
+
+The tests for §6.1 prove the implementation does what this project believes the
+RFC says, which is worth less than it looks: tests and implementation were
+written by the same hand. And the live ecosystem does not settle it either —
+nothing on the trusted lists inhibits mapping or anyPolicy, so the interesting
+branches meet no real material.
+
+`scripts/check-policy-tree.ts` puts the same chains to an implementation nobody
+here wrote. `openssl verify` implements §6.1 in full and takes each initial
+input as a flag: `-policy` is the user-initial-policy-set, `-explicit_policy`,
+`-inhibit_map` and `-inhibit_any` the three initial settings. Only the verdicts
+are compared:
+
+```
+$ node scripts/check-policy-tree.ts
+  ok    ours=accept  openssl=accept  the leaf asserts the accepted policy
+  ok    ours=reject  openssl=reject  the leaf asserts a policy that was not accepted
+  ok    ours=reject  openssl=reject  no CA above the leaf authorised its policy
+  ok    ours=accept  openssl=accept  a CA asserts anyPolicy
+  ok    ours=reject  openssl=reject  a CA asserts anyPolicy, and the caller inhibits it
+  ok    ours=reject  openssl=reject  the leaf wildcards after a CA withdrew anyPolicy
+  ok    ours=accept  openssl=accept  a CA maps the accepted policy onto its own
+  ok    ours=reject  openssl=reject  the same mapping, inhibited by the caller
+  ok    ours=reject  openssl=reject  a CA requires an explicit policy and the leaf is silent
+  ok    ours=reject  openssl=reject  a sub-CA under an anchor whose pathLenConstraint is zero
+
+Every case agrees with OpenSSL.
+```
+
+Run against OpenSSL 3.6.2 on 2026-08-12. The certificates are generated fresh
+each run, so only the agreement means anything.
+
+Two limits worth stating. OpenSSL is being asked about a **path**, this project
+about a **presented chain plus a trust anchor**, so the anchor is supplied as
+`-CAfile` and the intermediates as `-untrusted`; the RFC 5937 reading of an
+anchor's own constraints is therefore this project's alone and is not what
+agreement above confirms. And ten cases are ten cases: they cover each branch
+that has ever been wrong here, not the space.
+
+### Path length, and which extensions are marked critical, 2026-08-12
+
+The same pass, reading `basicConstraints` and the critical flag off every
+certificate:
+
+```
+$ node -e "…AsnConvert.parse each certificate, read BasicConstraints and
+           every extension's critical flag…"
+
+CA certificates: 1165        carrying a pathLenConstraint: 734
+  pathLen 0: 692    1: 31    2: 2    3: 3    4: 4    7: 2
+
+extensions ever marked critical, with how many certificates mark them:
+  2.5.29.15  keyUsage               2216
+  2.5.29.19  basicConstraints       1662
+  2.5.29.37  extendedKeyUsage       1002
+  2.5.29.32  certificatePolicies      72
+  2.5.29.36  policyConstraints         6
+  2.5.29.16  privateKeyUsagePeriod     4
+
+anchors/eudiw-pid-issuer-ca.pem   ca=true  pathLenConstraint=0
+```
+
+**Path length is not free to ignore.** 692 of the 1165 CA certificates say they
+sign end-entity certificates only, the EU PID Issuer CA among them. Before this
+was enforced, a chain claiming any of them issued a sub-CA — which then vouches
+for any subject at all — validated. Node exposes `.ca` and not the constraint
+beside it, which is why it went unread; nothing in the reference deployment is
+affected, because its chains are one document signer under the anchor directly.
+
+**Six extensions are ever marked critical, and one is still unprocessed.**
+`privateKeyUsagePeriod` (RFC 3280 §4.2.1.4, dropped from RFC 5280), on four
+certificates. RFC 5280 §6.1.4 (o) says a certificate with a critical extension
+the verifier does not process must be rejected, and this project does not
+implement that rule — see README "Spec-compliant vs simplified". The
+measurement is here because it bounds what the rule would cost: today, four
+certificates. Note that 78 of these were unprocessed before certificate
+policies were implemented.
+
 ### Trust list freshness: what the lists declare about themselves, 2026-08-12
 
 Refusing a list past its own `NextUpdate` is only defensible if the live lists

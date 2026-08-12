@@ -40,6 +40,9 @@ export {
 export type { Pointer, TrustListOptions, TrustListResult } from './trust/lotl.ts';
 export { resolveIssuerCertificateChain, resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
 export type { PathValidationOptions, ResolvedIssuer } from './trust/issuer-key.ts';
+// Certificate policies (RFC 5280 §6.1): reachable from PathValidationOptions,
+// so the type is public even though the state machine behind it is not.
+export type { CertificatePolicyOptions } from './trust/policy-tree.ts';
 export { checkStatusList, createStatusChecker, createStatusListCache } from './trust/status.ts';
 // Certificate revocation: CRL and OCSP, a different question from the above.
 export {

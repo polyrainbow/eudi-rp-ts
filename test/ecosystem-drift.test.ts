@@ -1,3 +1,5 @@
+import { AsnConvert } from '@peculiar/asn1-schema';
+import { Certificate } from '@peculiar/asn1-x509';
 import assert from 'node:assert/strict';
 import { X509Certificate } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -12,6 +14,12 @@ import {
 } from '../src/trust/lotl.ts';
 import { readKeyUsage } from '../src/trust/key-usage.ts';
 import { readNameConstraints } from '../src/trust/name-constraints.ts';
+import {
+  readCertificatePolicies,
+  readInhibitAnyPolicy,
+  readPolicyConstraints,
+  readPolicyMappings,
+} from '../src/trust/policies.ts';
 import { checkChainRevocation, readOcspResponders } from '../src/trust/revocation.ts';
 
 /**
@@ -48,6 +56,25 @@ const PID_ISSUER_CA_AIA = 'https://preprod.pki.eudiw.dev/aia/PIDIssuerCA02-UT.ca
 const JWT_VC_ISSUER_METADATA = 'https://issuer.eudiw.dev/.well-known/jwt-vc-issuer';
 const CREDENTIAL_ISSUER_METADATA = 'https://issuer.eudiw.dev/.well-known/openid-credential-issuer';
 const EU_LOTL = 'https://ec.europa.eu/tools/lotl/eu-lotl.xml';
+
+/**
+ * The extensions path validation here reads, and may therefore see marked
+ * critical without breaking RFC 5280 §6.1.4 (o): basic constraints, key usage,
+ * subject alternative name, name constraints, extended key usage, and the four
+ * policy extensions. Anything else marked critical is an extension this project
+ * ignores when the certificate insisted it be understood.
+ */
+const PROCESSED_EXTENSIONS = new Set([
+  '2.5.29.19',
+  '2.5.29.15',
+  '2.5.29.17',
+  '2.5.29.30',
+  '2.5.29.37',
+  '2.5.29.32',
+  '2.5.29.33',
+  '2.5.29.36',
+  '2.5.29.54',
+]);
 
 /** Prefix every failure, so CI output says what kind of failure it is. */
 const news = (what: string, then: string) =>
@@ -213,11 +240,17 @@ describe('the live trusted lists', { skip }, () => {
     let missingStartingTime = 0;
     let identifiedWithoutCertificate = 0;
     let caAnchors = 0;
+    let withCertificatePolicies = 0;
+    const unreadablePolicies: string[] = [];
+    const policyConstrained: string[] = [];
+    const policyMappers: string[] = [];
+    const inhibitors: string[] = [];
     const caWithoutKeyCertSign: string[] = [];
     const missingIssueDate: string[] = [];
     const unbounded: string[] = [];
     const lapsed: string[] = [];
     const unimplementedForms = new Set<string>();
+    const criticalAndIgnored = new Set<string>();
     const anchors: X509Certificate[] = [];
     const unreachable: string[] = [];
 
@@ -272,6 +305,37 @@ describe('the live trusted lists', { skip }, () => {
           }
         }
 
+        // Which extensions are marked critical, and how many of those this
+        // project would have to reject under RFC 5280 §6.1.4 (o). SECURITY.md
+        // names the gap and bounds it by this measurement, so a new critical
+        // extension appearing is the news that widens it.
+        for (const extension of AsnConvert.parse(entry.certificate.raw, Certificate).tbsCertificate
+          .extensions ?? []) {
+          if (extension.critical && !PROCESSED_EXTENSIONS.has(extension.extnID)) {
+            criticalAndIgnored.add(extension.extnID);
+          }
+        }
+
+        // Certificate policies, read on every certificate rather than only the
+        // CAs: an end-entity signer's policy is what a caller's `acceptable`
+        // list is matched against.
+        const name = entry.certificate.subject.split('\n').reverse().join(', ');
+        try {
+          if (readCertificatePolicies(entry.certificate)) withCertificatePolicies += 1;
+          const policyConstraints = readPolicyConstraints(entry.certificate);
+          if (policyConstraints?.requireExplicitPolicy !== undefined) {
+            policyConstrained.push(`${name} (requireExplicitPolicy=${policyConstraints.requireExplicitPolicy})`);
+          }
+          if (policyConstraints?.inhibitPolicyMapping !== undefined) {
+            inhibitors.push(`${name} (inhibitPolicyMapping=${policyConstraints.inhibitPolicyMapping})`);
+          }
+          const anyPolicyLimit = readInhibitAnyPolicy(entry.certificate);
+          if (anyPolicyLimit) inhibitors.push(`${name} (inhibitAnyPolicy=${anyPolicyLimit.skipCerts})`);
+          if (readPolicyMappings(entry.certificate)) policyMappers.push(name);
+        } catch (error) {
+          unreadablePolicies.push(`${name}: ${String(error)}`);
+        }
+
         let constraints;
         try {
           constraints = readNameConstraints(entry.certificate);
@@ -296,6 +360,12 @@ describe('the live trusted lists', { skip }, () => {
         `${identifiedWithoutCertificate} identify themselves without a certificate; ` +
         `${anchors.length} service entries yielded a certificate, ${caAnchors} of them CAs; ` +
         `unreachable: ${unreachable.join(', ') || 'none'}`,
+    );
+
+    t.diagnostic(
+      `${withCertificatePolicies} certificates assert a certificate policy; ` +
+        `${policyConstrained.length} require an explicit one; ` +
+        `${policyMappers.length} map policies; ${inhibitors.length} inhibit mapping or anyPolicy`,
     );
 
     // Bounds, not exact counts: these lists change continuously and an exact
@@ -323,6 +393,38 @@ describe('the live trusted lists', { skip }, () => {
       news(
         `A CA on a trusted list now carries a Name Constraint in a form this project does not implement: ${[...unimplementedForms].join(', ')}`,
         'chains under that CA now fail closed with ISSUER_NAME_NOT_PERMITTED. Implement the form in src/trust/name-matching.ts — the "costs nothing today" argument in README "Name Constraints" no longer holds.',
+      ),
+    );
+
+    assert.deepEqual(
+      unreadablePolicies,
+      [],
+      news(
+        `${unreadablePolicies.length} certificate(s) carry a policy extension this project cannot read: ${unreadablePolicies.slice(0, 3).join('; ')}`,
+        'every chain under them now fails closed with ISSUER_POLICY_NOT_PERMITTED, because an unreadable policy statement is not an absent one. Fix the reader in src/trust/policies.ts — the "nothing on the lists is unreadable" argument in REPRODUCE.md no longer holds.',
+      ),
+    );
+
+    assert.deepEqual(
+      [...criticalAndIgnored],
+      ['2.5.29.16'],
+      news(
+        `The extensions marked critical but not processed here are now [${[...criticalAndIgnored].join(', ')}], not [2.5.29.16 privateKeyUsagePeriod].`,
+        'RFC 5280 §6.1.4 (o) says a certificate whose critical extension we do not process must be rejected, and SECURITY.md bounds that gap by this exact list. A new OID here widens it — decide whether to process the extension or to start rejecting, and correct the measurement in REPRODUCE.md either way.',
+      ),
+    );
+
+    // REPRODUCE.md records that the live lists constrain policies in exactly
+    // one way — eight CAs requiring an explicit policy — and never inhibit
+    // mapping or anyPolicy. Those two counters are therefore exercised against
+    // fixtures only, and the day that stops being true is the day the claim
+    // needs rewriting rather than repeating.
+    assert.deepEqual(
+      inhibitors,
+      [],
+      news(
+        `${inhibitors.length} certificate(s) now inhibit policy mapping or anyPolicy: ${inhibitors.slice(0, 3).join('; ')}`,
+        'paths under them are now narrower than REPRODUCE.md describes. Nothing is broken — update the certificate policies measurement there, and check the chains those CAs issue still validate.',
       ),
     );
 

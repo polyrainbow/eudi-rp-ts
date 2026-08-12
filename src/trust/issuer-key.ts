@@ -2,9 +2,11 @@ import { type KeyObject, X509Certificate } from 'node:crypto';
 import { decodeProtectedHeader, unsupportedKeyReason } from '../crypto.ts';
 import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from './anchors.ts';
+import { isSelfIssued, readBasicConstraints } from './basic-constraints.ts';
 import { readKeyUsage } from './key-usage.ts';
 import { certificateNames, readNameConstraints } from './name-constraints.ts';
 import { checkNames } from './name-matching.ts';
+import { type CertificatePolicyOptions, checkCertificatePolicies } from './policy-tree.ts';
 
 /**
  * Resolve the public key that must have signed an SD-JWT VC, and prove that key
@@ -19,9 +21,10 @@ import { checkNames } from './name-matching.ts';
  *
  * Checked here: validity windows, signature linkage between certificates, that
  * every issuing certificate is a CA and asserts `keyCertSign`, that the leaf
- * asserts `digitalSignature` if it asserts any KeyUsage at all, path length, an
- * optional Extended Key Usage allowlist, Name Constraints, and termination at a
- * trust anchor.
+ * asserts `digitalSignature` if it asserts any KeyUsage at all, path length —
+ * the caller's limit and every CA's own `pathLenConstraint` — an optional
+ * Extended Key Usage allowlist, Name Constraints, certificate policies, and
+ * termination at a trust anchor.
  *
  * Of those, the *leaf* KeyUsage check is the one nothing else was doing. The
  * issuing-side `keyCertSign` requirement is already inside Node's `.ca` and
@@ -29,16 +32,10 @@ import { checkNames } from './name-matching.ts';
  * by nobody, because no library here knows that this key is about to verify a
  * credential signature rather than a TLS handshake.
  *
- * NOT checked, and why:
- *   - **Certificate policies.** Node exposes no way to reach them, so it means
- *     parsing DER — which `key-usage.ts` and `name-constraints.ts` now do for
- *     their extensions, making this a matter of nobody having needed policy
- *     processing rather than of it being out of reach.
- *   - **Revocation of the certificates themselves** (CRL, OCSP). Credential
- *     revocation is handled by Token Status List; issuer certificate revocation
- *     is a separate mechanism this does not implement. In the EUDI model a
- *     withdrawn issuer is expected to leave the trusted list, which the trust
- *     list refresh picks up — that is weaker than CRL and worth knowing.
+ * Not done here, and deliberately: **revocation of the certificates themselves**
+ * (CRL, OCSP) is implemented in `revocation.ts` and driven a step later, because
+ * this function must stay synchronous — `@sd-jwt`'s callbacks have nowhere to
+ * await, so the revocation check runs against the chain this returns.
  */
 export type ResolvedIssuer = {
   publicKey: KeyObject;
@@ -54,8 +51,19 @@ export type PathValidationOptions = {
    * (ISO 18013-5 document signer) and `1.0.23220.4.1.2`.
    */
   requiredExtendedKeyUsage?: string[];
-  /** Reject chains longer than this, anchor excluded. */
+  /**
+   * Reject chains longer than this, anchor excluded. The caller's own limit,
+   * independent of the `pathLenConstraint` each CA on the chain publishes —
+   * which is enforced whatever this says.
+   */
   maxChainLength?: number;
+  /**
+   * Certificate policy processing (RFC 5280 §6.1). Absent means the caller
+   * accepts any policy — which is *not* the same as skipping the step: a CA
+   * that requires an explicit policy, inhibits anyPolicy or maps policies is
+   * obeyed either way. See `policy-tree.ts`.
+   */
+  certificatePolicies?: CertificatePolicyOptions;
   /**
    * The instant to evaluate trust list status at. Defaults to `now`.
    *
@@ -193,6 +201,16 @@ export function resolveIssuerCertificateChain(
   const notPermitted = checkChainNameConstraints(fullChain);
   if (notPermitted) return reject('ISSUER_NAME_NOT_PERMITTED', notPermitted);
 
+  const tooDeep = checkPathLength(fullChain);
+  if (tooDeep) return reject('ISSUER_UNTRUSTED', tooDeep);
+
+  // Certificate policies, over the same path and with the same reading of the
+  // anchor's role: its constraints bind, its own assertions do not. Which
+  // policies are acceptable is the caller's, so by default this enforces only
+  // what the certificates themselves demand.
+  const policyFailure = checkCertificatePolicies(fullChain, options.certificatePolicies ?? {});
+  if (policyFailure) return reject('ISSUER_POLICY_NOT_PERMITTED', policyFailure);
+
   const leaf = chain[0]!;
 
   // The leaf's key is about to verify a credential signature, so a leaf that
@@ -267,6 +285,59 @@ function checkMaySignCertificates(cert: X509Certificate, position: string): stri
   }
   if (!usage || usage.bits.has('keyCertSign')) return undefined;
   return `${position} does not assert keyCertSign (has ${[...usage.bits].join(', ') || 'no usage'}): ${cert.subject}`;
+}
+
+/**
+ * Path length across a whole path (RFC 5280 §6.1.2 (k), §6.1.4 (l) and (m)).
+ *
+ * `pathLenConstraint` is a CA stating how many further CA certificates may sit
+ * between it and an end entity, and it is the half of `basicConstraints` that
+ * Node does not expose — `.ca` is the other half. Without it a CA that signs
+ * end-entity certificates only, which is 692 of the 1165 CA certificates on the
+ * live trusted lists and the EU PID Issuer CA among them, can appear to have
+ * issued a sub-CA that then vouches for anybody.
+ *
+ * `chain` is leaf-first with the anchor last; the RFC counts the other way. The
+ * anchor's own constraint is applied as an initial limit (RFC 5937 §3.2), on the
+ * same reading as Name Constraints and the policy constraints: what a trust
+ * anchor says about the paths beneath it binds them.
+ *
+ * A self-issued certificate does not spend a step (§6.1.4 (l)) — it is a CA
+ * re-keying itself, not a delegation. The end certificate's own constraint is
+ * not read: it says what *it* may issue, which is not this path's question.
+ */
+function checkPathLength(chain: X509Certificate[]): string | undefined {
+  const anchor = chain.at(-1);
+  const path = chain.slice(0, -1).reverse();
+  if (path.length === 0 || !anchor) return undefined;
+
+  let remaining = path.length;
+  let limitedBy = anchor.subject;
+  try {
+    const anchorConstraints = readBasicConstraints(anchor);
+    if (anchorConstraints?.pathLenConstraint !== undefined) {
+      remaining = Math.min(remaining, anchorConstraints.pathLenConstraint);
+    }
+
+    // Every certificate but the last: these are the CAs, and the rule is about
+    // how many of them there may be.
+    for (const cert of path.slice(0, -1)) {
+      if (!isSelfIssued(cert)) {
+        if (remaining <= 0) {
+          return `${cert.subject} is a CA certificate below ${limitedBy}, which permits no further CA certificates`;
+        }
+        remaining -= 1;
+      }
+      const constraints = readBasicConstraints(cert);
+      if (constraints?.pathLenConstraint !== undefined && constraints.pathLenConstraint < remaining) {
+        remaining = constraints.pathLenConstraint;
+        limitedBy = cert.subject;
+      }
+    }
+  } catch (error) {
+    return `Cannot read the basic constraints of a certificate on the path: ${String(error)}`;
+  }
+  return undefined;
 }
 
 /**

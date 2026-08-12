@@ -8,11 +8,17 @@
 import 'reflect-metadata';
 import { AsnConvert } from '@peculiar/asn1-schema';
 import {
+  CertificatePolicies,
   GeneralName,
   GeneralSubtree,
   GeneralSubtrees,
+  InhibitAnyPolicy,
   Name as AsnName,
   NameConstraints,
+  PolicyConstraints,
+  PolicyInformation,
+  PolicyMapping,
+  PolicyMappings,
 } from '@peculiar/asn1-x509';
 import * as x509 from '@peculiar/x509';
 import { X509Certificate, webcrypto } from 'node:crypto';
@@ -81,6 +87,112 @@ export function nameConstraintsDer(spec: ConstraintSpec): ArrayBuffer {
   );
 }
 
+/**
+ * The four certificate policy extensions (RFC 5280 §4.2.1.4, §4.2.1.5,
+ * §4.2.1.11, §4.2.1.14), as a test writes them.
+ *
+ * `anyPolicy` is spelled out rather than special-cased: it is just the OID
+ * `2.5.29.32.0` in the list, which is how a CA writes it too.
+ */
+export type PolicySpec = {
+  policies?: string[];
+  /** RFC 5280 leaves this to the CA; both live EUDI signers say false. */
+  policiesCritical?: boolean;
+  /** `[issuerDomainPolicy, subjectDomainPolicy]` pairs. */
+  policyMappings?: [string, string][];
+  requireExplicitPolicy?: number;
+  inhibitPolicyMapping?: number;
+  inhibitAnyPolicy?: number;
+  /**
+   * Extensions written as raw DER, for shapes a conforming CA never emits —
+   * truncated values, a negative `SkipCerts`. Added after the ones above.
+   */
+  raw?: { oid: string; critical?: boolean; der: ArrayBuffer }[];
+};
+
+function policyExtensions(spec: PolicySpec): x509.Extension[] {
+  const extensions: x509.Extension[] = [];
+
+  if (spec.policies) {
+    extensions.push(
+      new x509.Extension(
+        '2.5.29.32',
+        spec.policiesCritical ?? false,
+        AsnConvert.serialize(
+          new CertificatePolicies(
+            spec.policies.map((oid) => new PolicyInformation({ policyIdentifier: oid })),
+          ),
+        ),
+      ),
+    );
+  }
+
+  if (spec.policyMappings) {
+    extensions.push(
+      new x509.Extension(
+        '2.5.29.33',
+        true,
+        AsnConvert.serialize(
+          new PolicyMappings(
+            spec.policyMappings.map(
+              ([issuerDomainPolicy, subjectDomainPolicy]) =>
+                new PolicyMapping({ issuerDomainPolicy, subjectDomainPolicy } as never),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  if (spec.requireExplicitPolicy !== undefined || spec.inhibitPolicyMapping !== undefined) {
+    extensions.push(
+      new x509.Extension(
+        '2.5.29.36',
+        true,
+        AsnConvert.serialize(
+          new PolicyConstraints({
+            ...(spec.requireExplicitPolicy === undefined
+              ? {}
+              : { requireExplicitPolicy: skipCerts(spec.requireExplicitPolicy) }),
+            ...(spec.inhibitPolicyMapping === undefined
+              ? {}
+              : { inhibitPolicyMapping: skipCerts(spec.inhibitPolicyMapping) }),
+          }),
+        ),
+      ),
+    );
+  }
+
+  if (spec.inhibitAnyPolicy !== undefined) {
+    extensions.push(
+      new x509.Extension(
+        '2.5.29.54',
+        true,
+        AsnConvert.serialize(new InhibitAnyPolicy(skipCerts(spec.inhibitAnyPolicy))),
+      ),
+    );
+  }
+
+  for (const { oid, critical, der } of spec.raw ?? []) {
+    extensions.push(new x509.Extension(oid, critical ?? false, der));
+  }
+
+  return extensions;
+}
+
+/** `SkipCerts ::= INTEGER (0..MAX)` as the content octets the converter wants. */
+function skipCerts(count: number): ArrayBuffer {
+  const bytes: number[] = [];
+  let remaining = count;
+  do {
+    bytes.unshift(remaining & 0xff);
+    remaining = Math.floor(remaining / 256);
+  } while (remaining > 0);
+  // A leading bit set would read back as a negative INTEGER.
+  if ((bytes[0]! & 0x80) !== 0) bytes.unshift(0);
+  return new Uint8Array(bytes).buffer;
+}
+
 export type Issued = {
   cert: X509Certificate;
   /** For signing the next certificate down. */
@@ -93,7 +205,8 @@ const YEAR = 365 * 24 * 60 * 60 * 1000;
 export async function createCa(
   subject: string,
   constraints?: ConstraintSpec,
-  options: { pathLength?: number; keyUsage?: KeyUsageName[] } = {},
+  /** `pathLength: null` leaves the constraint absent, which means unlimited. */
+  options: { pathLength?: number | null; keyUsage?: KeyUsageName[]; policies?: PolicySpec } = {},
 ): Promise<Issued> {
   const keys = (await webcrypto.subtle.generateKey(ALG, true, ['sign', 'verify'])) as CryptoKeyPair;
   const cert = await x509.X509CertificateGenerator.createSelfSigned({
@@ -104,8 +217,13 @@ export async function createCa(
     signingAlgorithm: SIGN,
     keys: keys as never,
     extensions: [
-      new x509.BasicConstraintsExtension(true, options.pathLength ?? 3, true),
+      new x509.BasicConstraintsExtension(
+        true,
+        options.pathLength === undefined ? 3 : (options.pathLength ?? undefined),
+        true,
+      ),
       ...(options.keyUsage ? [keyUsageExtension(options.keyUsage)] : []),
+      ...(options.policies ? policyExtensions(options.policies) : []),
       ...(constraints
         ? [new x509.Extension('2.5.29.30', constraints.critical ?? true, nameConstraintsDer(constraints))]
         : []),
@@ -124,13 +242,21 @@ export async function issue(
     subjectAltNames?: NameSpec[];
     serial?: string;
     keyUsage?: KeyUsageName[];
+    policies?: PolicySpec;
+    /** Overrides the subject-derived issuer, for a self-issued certificate. */
+    issuer?: string;
+    /** `null` leaves the constraint absent, which means unlimited. */
+    pathLength?: number | null;
   } = {},
 ): Promise<Issued> {
   const keys = (await webcrypto.subtle.generateKey(ALG, true, ['sign', 'verify'])) as CryptoKeyPair;
   const isCa = options.ca ?? options.constraints !== undefined;
 
-  const extensions: x509.Extension[] = [new x509.BasicConstraintsExtension(isCa, isCa ? 2 : undefined, true)];
+  const pathLength =
+    options.pathLength === undefined ? (isCa ? 2 : undefined) : (options.pathLength ?? undefined);
+  const extensions: x509.Extension[] = [new x509.BasicConstraintsExtension(isCa, pathLength, true)];
   if (options.keyUsage) extensions.push(keyUsageExtension(options.keyUsage));
+  if (options.policies) extensions.push(...policyExtensions(options.policies));
   if (options.constraints) {
     extensions.push(
       new x509.Extension('2.5.29.30', options.constraints.critical ?? true, nameConstraintsDer(options.constraints)),
@@ -152,7 +278,7 @@ export async function issue(
   const cert = await x509.X509CertificateGenerator.create({
     serialNumber: options.serial ?? '02',
     subject,
-    issuer: new x509.X509Certificate(parent.cert.raw).subject,
+    issuer: options.issuer ?? new x509.X509Certificate(parent.cert.raw).subject,
     notBefore: new Date(Date.now() - YEAR),
     notAfter: new Date(Date.now() + YEAR),
     signingAlgorithm: SIGN,
