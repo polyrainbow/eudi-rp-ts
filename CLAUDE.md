@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-There is **no build step for development** — Node 22.18+/24+ runs the `.ts` files directly via
+There is **no build step for development** — Node 22.18 or newer runs the `.ts` files directly via
 unflagged type stripping. `npm run build` exists only to produce `dist/` for npm publication.
 
 ```bash

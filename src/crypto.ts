@@ -222,7 +222,7 @@ export function importPublicJwk(
   }
 
   try {
-    return createPublicKey({ key: jwk as import('node:crypto').JsonWebKey, format: 'jwk' });
+    return createPublicKey({ key: jwk as import('node:crypto').webcrypto.JsonWebKey, format: 'jwk' });
   } catch {
     return undefined;
   }

@@ -16,10 +16,11 @@ for this. That gap is what this project fills.
 
 ## Quick start
 
-Requires **Node 22.18+ or 24+** — that is when running `.ts` files directly
+Requires **Node 22.18 or newer** — that is when running `.ts` files directly
 became unflagged. On Node 22.0–22.17 type stripping is behind
 `--experimental-strip-types` and `npm start` will fail. There is no build step;
-Node runs the TypeScript as-is.
+Node runs the TypeScript as-is. CI runs the suite on 22.18.0, 24.x and 26.x —
+the floor, the release line the Docker image runs, and the current one.
 
 ```bash
 npm install

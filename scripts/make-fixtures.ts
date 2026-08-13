@@ -227,8 +227,11 @@ async function issueMdoc(options: {
   const protectedBytes = encode(new Map<number, unknown>([[1, -7]]));
   const payload = encodeTag24(encode(mso));
   const sigStructure = encode(['Signature1', protectedBytes, new Uint8Array(0), payload]);
+  // `BufferSource` is a view over a plain ArrayBuffer, which `Uint8Array` on its
+  // own no longer proves: cbor2 types `encode` as `Uint8Array<ArrayBufferLike>`,
+  // and that union admits SharedArrayBuffer. It never returns one.
   const signature = new Uint8Array(
-    await webcrypto.subtle.sign(SIGN, options.signingKey, sigStructure),
+    await webcrypto.subtle.sign(SIGN, options.signingKey, sigStructure as Uint8Array<ArrayBuffer>),
   );
 
   const issuerSigned = {

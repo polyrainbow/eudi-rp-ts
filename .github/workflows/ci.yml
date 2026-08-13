@@ -24,8 +24,10 @@ jobs:
         # 22.18.0 is the floor declared in `engines`: the first release that
         # strips types without a flag, which is what makes `node app/main.ts`
         # and `node --test test/**/*.test.ts` work at all. 24.x is what the
-        # Dockerfile runs. Both are tested because the floor is a promise.
-        node: ['22.18.0', '24.x']
+        # Dockerfile runs. 26.x is the current release line, and `engines`
+        # declares no ceiling — ">=22.18.0" promises it as much as it promises
+        # the floor. Both ends are promises, so both ends are tested.
+        node: ['22.18.0', '24.x', '26.x']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
