@@ -3,13 +3,12 @@ import type { JWK } from 'jose';
 import type { TtlCache } from '../fetching.ts';
 import type { VerifierIdentity } from './identity.ts';
 import { type Outcome, type Rejected, accept, reject } from '../result.ts';
-import { type CredentialFormat, type EventSink, noopSink, withoutVerdict } from '../events.ts';
+import { type CredentialFormat, type EventSink, noopSink } from '../events.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
 import { type AgeResult, type VerifiedCredential, verifyAgeOver18SdJwtVc } from '../verify.ts';
 import { createDecryptJwe, createVerifyJwt, generateRandom, hashCallback } from './callbacks.ts';
 import { CREDENTIAL_QUERY_ID, MDOC_CREDENTIAL_QUERY_ID, PID_MDOC_NAMESPACE } from './query.ts';
-import { evaluateAgeOver18Mdoc } from '../predicate/age.ts';
-import { verifyDeviceResponse } from '../mdoc/device-response.ts';
+import { verifyAgeOver18Mdoc } from '../mdoc/device-response.ts';
 import { buildSessionTranscript, jwkThumbprint } from '../mdoc/session-transcript.ts';
 
 /** Which credential format actually answered. */
@@ -251,32 +250,30 @@ async function verifyMdocPresentation(
   context: PresentationContext,
   deviceResponse: string,
 ): Promise<Outcome<VerifiedPresentation>> {
-  const emit = context.onEvent ?? noopSink;
-  const startedAt = Date.now();
-  const rejectWith = <T>(outcome: Outcome<T>): Outcome<T> => {
-    if (!outcome.verified) {
-      emit({
-        type: 'verification.rejected',
-        format: 'mso_mdoc',
-        reason: outcome.reason,
-        durationMs: Date.now() - startedAt,
-      });
-    }
-    return outcome;
-  };
-
   const transcript = sessionTranscriptFor(context);
-  if (!transcript.verified) return rejectWith(transcript);
+  if (!transcript.verified) {
+    // The one rejection this branch makes before delegating, so the one it has
+    // to report itself.
+    (context.onEvent ?? noopSink)({
+      type: 'verification.rejected',
+      format: 'mso_mdoc',
+      reason: transcript.reason,
+      durationMs: 0,
+    });
+    return transcript;
+  }
 
-  const result = await verifyDeviceResponse({
-    // The age predicate below can still reject what the device response
-    // established, so the verdict is this function's — the mirror of what
-    // `verifyAgeOver18SdJwtVc` does on the SD-JWT VC side.
-    onEvent: withoutVerdict(emit),
+  // `verifyAgeOver18Mdoc` owns the verdict, predicate included, exactly as
+  // `verifyAgeOver18SdJwtVc` does on the other branch — so the sink goes
+  // straight through and this function keeps no copy of that rule.
+  const result = await verifyAgeOver18Mdoc({
     deviceResponse,
     anchors: context.anchors,
     sessionTranscript: transcript.value,
     expectedDocType: PID_MDOC_NAMESPACE,
+    // The EUDI PID's namespace and doc type coincide; said explicitly rather
+    // than left to the default, because for an mDL they would not.
+    namespace: PID_MDOC_NAMESPACE,
     ...(context.tolerateMalformedMdocValidity ? { tolerateMalformedValidityDates: true } : {}),
     // Same revocation policy and the same cache as the SD-JWT VC branch: the
     // format a wallet happens to answer in must not decide whether the
@@ -286,27 +283,17 @@ async function verifyMdocPresentation(
     checkCertificateRevocation: context.config.checkCertificateRevocation,
     ...(context.revocationCache ? { revocationCache: context.revocationCache } : {}),
     ...(context.config.allowedAlgs ? { allowedAlgs: context.config.allowedAlgs } : {}),
+    ...(context.onEvent ? { onEvent: context.onEvent } : {}),
     ...(context.signal ? { signal: context.signal } : {}),
   });
-  if (!result.verified) return rejectWith(result);
-
-  const elements = result.value.claims[PID_MDOC_NAMESPACE] ?? {};
-  const age = evaluateAgeOver18Mdoc(elements, new Date());
-  if (!age.verified) return rejectWith(age);
-
-  emit({
-    type: 'verification.accepted',
-    format: 'mso_mdoc',
-    vct: result.value.docType,
-    evidence: age.value.evidence,
-    durationMs: Date.now() - startedAt,
-  });
+  if (!result.verified) return result;
 
   return accept({
-    ...age.value,
+    ageOver18: result.value.ageOver18,
+    evidence: result.value.evidence,
     format: 'mso_mdoc' as const,
-    claims: elements,
-    vct: result.value.docType,
+    claims: result.value.claims[PID_MDOC_NAMESPACE] ?? {},
+    credentialType: result.value.docType,
     issuerCertificateSubject: result.value.issuerCertificateSubject,
     // mdoc binds the holder through the device signature over the session
     // transcript rather than a Key Binding JWT; verifyDeviceResponse has

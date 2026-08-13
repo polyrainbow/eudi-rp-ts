@@ -1,5 +1,6 @@
 import { type Outcome, accept, reject } from '../result.ts';
 import { type EventSink, noopSink, withoutVerdict } from '../events.ts';
+import { type AgeResult, evaluateAgeOver18Mdoc } from '../predicate/age.ts';
 import { DEFAULT_ALLOWED_ALGS, type JwsAlg } from '../crypto.ts';
 import type { TtlCache } from '../fetching.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
@@ -161,11 +162,72 @@ export async function verifyDeviceResponse(
   emit({
     type: 'verification.accepted',
     format: 'mso_mdoc',
-    vct: verified.value.docType,
+    credentialType: verified.value.docType,
     durationMs: Date.now() - startedAt,
   });
 
   return accept({ ...verified.value, deviceSignedClaims: deviceAuth.value });
+}
+
+export type AgeOver18MdocOptions = DeviceResponseOptions & {
+  /**
+   * Namespace holding the age elements. Defaults to the doc type.
+   *
+   * The default is right for the EUDI PID, where both are
+   * `eu.europa.ec.eudi.pid.1`, and **wrong in general**: an ISO mDL has doc
+   * type `org.iso.18013.5.1.mDL` and namespace `org.iso.18013.5.1`. mdoc does
+   * not require the two to agree, so anything but a PID should say which.
+   */
+  namespace?: string;
+};
+
+/**
+ * Verify a DeviceResponse and evaluate the age-over-18 predicate in one step —
+ * the mdoc counterpart to `verifyAgeOver18SdJwtVc`.
+ *
+ * It existed as a shape before it existed as a function: `oid4vp/response.ts`
+ * composed `verifyDeviceResponse` with `evaluateAgeOver18Mdoc` by hand, which
+ * meant the mdoc branch carried its own copy of the verdict-ownership rule
+ * below while the SD-JWT branch got it from `verifyAgeOver18SdJwtVc`. Two
+ * copies of a rule is one more than can be relied on.
+ *
+ * The verdict is this function's, for the reason `src/events.ts` gives: the
+ * predicate can reject a device response that verified perfectly, and an inner
+ * `verification.accepted` would record an acceptance the caller never got.
+ */
+export async function verifyAgeOver18Mdoc(
+  options: AgeOver18MdocOptions,
+): Promise<Outcome<VerifiedDeviceResponse & AgeResult>> {
+  const emit = options.onEvent ?? noopSink;
+  const startedAt = Date.now();
+  const rejectWith = <T>(outcome: Outcome<T>): Outcome<T> => {
+    if (!outcome.verified) {
+      emit({
+        type: 'verification.rejected',
+        format: 'mso_mdoc',
+        reason: outcome.reason,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+    return outcome;
+  };
+
+  const verified = await verifyDeviceResponse({ ...options, onEvent: withoutVerdict(emit) });
+  if (!verified.verified) return rejectWith(verified);
+
+  const namespace = options.namespace ?? verified.value.docType;
+  const age = evaluateAgeOver18Mdoc(verified.value.claims[namespace] ?? {}, options.now ?? new Date());
+  if (!age.verified) return rejectWith(age);
+
+  emit({
+    type: 'verification.accepted',
+    format: 'mso_mdoc',
+    credentialType: verified.value.docType,
+    evidence: age.value.evidence,
+    durationMs: Date.now() - startedAt,
+  });
+
+  return accept({ ...verified.value, ...age.value });
 }
 
 async function verifyDeviceAuth(

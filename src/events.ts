@@ -24,13 +24,14 @@ export type CredentialFormat = 'dc+sd-jwt' | 'mso_mdoc';
 
 export type VerificationEvent =
   /**
-   * `vct` is the credential type when it is already known. For mdoc it is not:
+   * `credentialType` is known up front for SD-JWT VC — the `vct` claim. For
+   * mdoc it is not:
    * the doc type lives inside the signed Mobile Security Object, so it is
    * unreadable until the issuer signature has been verified, which is after
    * this point. That is a property of the format, not a gap — the doc type
    * appears on `verification.accepted`.
    */
-  | { type: 'verification.started'; format: CredentialFormat; vct: string | undefined }
+  | { type: 'verification.started'; format: CredentialFormat; credentialType: string | undefined }
   | { type: 'issuer.resolved'; format: CredentialFormat; subject: string; chainLength: number }
   | { type: 'status.checked'; outcome: 'valid' | 'revoked' | 'unavailable'; cached: boolean }
   /**
@@ -45,7 +46,7 @@ export type VerificationEvent =
   | {
       type: 'verification.accepted';
       format: CredentialFormat;
-      vct: string;
+      credentialType: string;
       evidence?: string;
       durationMs: number;
     }

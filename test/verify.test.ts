@@ -50,7 +50,7 @@ describe('verifyAgeOver18SdJwtVc', () => {
     assert.equal(result.verified, true, JSON.stringify(result));
     assert.equal(result.value.ageOver18, true);
     assert.equal(result.value.evidence, 'age_equal_or_over.18');
-    assert.equal(result.value.vct, 'urn:eudi:pid:1');
+    assert.equal(result.value.credentialType, 'urn:eudi:pid:1');
     assert.equal(result.value.keyBinding?.audience, fixtures.audience);
   });
 
@@ -150,7 +150,7 @@ describe('issuer trust', () => {
       credential: credential('over18'),
       expectedVct: 'urn:eudi:something-else:1',
     });
-    assertRejected(result, 'UNEXPECTED_VCT');
+    assertRejected(result, 'UNEXPECTED_CREDENTIAL_TYPE');
   });
 });
 

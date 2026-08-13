@@ -117,7 +117,13 @@ export type VerifySdJwtVcOptions = {
 
 export type VerifiedCredential = {
   claims: Record<string, unknown>;
-  vct: string;
+  /**
+   * What kind of credential this is: the `vct` claim for SD-JWT VC, the
+   * `docType` for mdoc. Named for neither, because this type is what both
+   * formats produce — it used to be `vct`, which meant the mdoc path filled a
+   * field named after a claim mdoc does not have.
+   */
+  credentialType: string;
   issuerCertificateSubject: string;
   keyBinding: { audience: string; nonce: string } | undefined;
 };
@@ -224,7 +230,7 @@ export async function verifySdJwtVc(
   emit({
     type: 'verification.started',
     format: 'dc+sd-jwt',
-    vct: typeof payload['vct'] === 'string' ? payload['vct'] : undefined,
+    credentialType: typeof payload['vct'] === 'string' ? payload['vct'] : undefined,
   });
 
   const issuer = resolveIssuerKeyFromX5c(issuerJwt, options.anchors, now, options.pathValidation ?? {});
@@ -327,7 +333,7 @@ export async function verifySdJwtVc(
   const vct = typeof claims['vct'] === 'string' ? claims['vct'] : undefined;
   if (!vct) return rejectWith(reject('CREDENTIAL_MALFORMED', 'Credential has no `vct` claim'));
   if (options.expectedVct && vct !== options.expectedVct) {
-    return rejectWith(reject('UNEXPECTED_VCT', `Expected vct ${options.expectedVct}, got ${vct}`));
+    return rejectWith(reject('UNEXPECTED_CREDENTIAL_TYPE', `Expected vct ${options.expectedVct}, got ${vct}`));
   }
 
   let keyBinding: VerifiedCredential['keyBinding'];
@@ -379,11 +385,16 @@ export async function verifySdJwtVc(
     if (rejected) return rejectWith(rejected);
   }
 
-  emit({ type: 'verification.accepted', format: 'dc+sd-jwt', vct, durationMs: Date.now() - startedAt });
+  emit({
+    type: 'verification.accepted',
+    format: 'dc+sd-jwt',
+    credentialType: vct,
+    durationMs: Date.now() - startedAt,
+  });
 
   return accept({
     claims,
-    vct,
+    credentialType: vct,
     issuerCertificateSubject: issuer.value.leaf.subject,
     keyBinding,
   });
@@ -428,7 +439,7 @@ export async function verifyAgeOver18SdJwtVc(
   emit({
     type: 'verification.accepted',
     format: 'dc+sd-jwt',
-    vct: credential.value.vct,
+    credentialType: credential.value.credentialType,
     evidence: age.value.evidence,
     durationMs: Date.now() - startedAt,
   });

@@ -43,7 +43,7 @@ describe('real EUDI reference credential', () => {
     const result = await verifySdJwtVc(options);
 
     assert.equal(result.verified, true, JSON.stringify(result));
-    assert.equal(result.value.vct, 'urn:eudi:pid:1');
+    assert.equal(result.value.credentialType, 'urn:eudi:pid:1');
     assert.match(result.value.issuerCertificateSubject, /CN=PID DS - 002/);
   });
 
@@ -170,7 +170,7 @@ describe('real credential over OID4VP', { skip: expired ? `credential expired ${
       };
       assert.equal(outcome.status, 'verified', JSON.stringify(outcome));
       assert.equal(outcome.result['evidence'], 'birthdate');
-      assert.equal(outcome.result['vct'], 'urn:eudi:pid:1');
+      assert.equal(outcome.result['credentialType'], 'urn:eudi:pid:1');
     } finally {
       server.close();
     }

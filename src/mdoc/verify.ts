@@ -154,7 +154,7 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
   // The doc type is inside the signed MSO, which is unreadable until the
   // signature below has verified — so unlike the SD-JWT VC path, this cannot
   // name the credential type yet. It is on `verification.accepted` instead.
-  emit({ type: 'verification.started', format: 'mso_mdoc', vct: undefined });
+  emit({ type: 'verification.started', format: 'mso_mdoc', credentialType: undefined });
 
   // The chain lives in the COSE header rather than a JOSE one, but from here
   // trust is established exactly as it is for SD-JWT VC.
@@ -205,7 +205,7 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
     return rejectWith(reject('CREDENTIAL_MALFORMED', 'MobileSecurityObject has no docType'));
   }
   if (options.expectedDocType && docType !== options.expectedDocType) {
-    return rejectWith(reject('UNEXPECTED_VCT', `Expected docType ${options.expectedDocType}, got ${docType}`));
+    return rejectWith(reject('UNEXPECTED_CREDENTIAL_TYPE', `Expected docType ${options.expectedDocType}, got ${docType}`));
   }
 
   const validity = readValidity(get(mso, 'validityInfo'));
@@ -297,7 +297,12 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
     if (rejected) return rejectWith(rejected);
   }
 
-  emit({ type: 'verification.accepted', format: 'mso_mdoc', vct: docType, durationMs: Date.now() - startedAt });
+  emit({
+    type: 'verification.accepted',
+    format: 'mso_mdoc',
+    credentialType: docType,
+    durationMs: Date.now() - startedAt,
+  });
 
   return accept({
     docType,

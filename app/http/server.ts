@@ -194,7 +194,7 @@ export function createVerifierServer(
             verified: true,
             format: outcome.value.format,
             evidence: outcome.value.evidence,
-            vct: outcome.value.vct,
+            credentialType: outcome.value.credentialType,
             issuer: outcome.value.issuerCertificateSubject,
           }
         : { verified: false, reason: outcome.reason, detail: outcome.detail },

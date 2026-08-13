@@ -6,7 +6,7 @@ export type ReasonCode =
   // Shape of the token itself
   | 'CREDENTIAL_MALFORMED'
   | 'UNSUPPORTED_ALGORITHM'
-  | 'UNEXPECTED_VCT'
+  | 'UNEXPECTED_CREDENTIAL_TYPE'
   // Issuer identity and trust
   | 'ISSUER_KEY_UNRESOLVABLE'
   | 'ISSUER_UNTRUSTED'

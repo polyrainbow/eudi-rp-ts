@@ -124,7 +124,7 @@ describe('OID4VP round trip', () => {
     assert.equal(status, 'verified', JSON.stringify(result));
     assert.equal(result?.['verified'], true);
     assert.equal(result?.['evidence'], 'age_equal_or_over.18');
-    assert.equal(result?.['vct'], 'urn:eudi:pid:1');
+    assert.equal(result?.['credentialType'], 'urn:eudi:pid:1');
   });
 
   it('rejects a presentation bound to a nonce from a different session', async () => {

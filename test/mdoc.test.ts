@@ -61,7 +61,7 @@ describe('mdoc from the EU reference issuer', () => {
     const result = await verifyMdoc({ ...base, expectedDocType: 'org.iso.18013.5.1.mDL' });
 
     assert.equal(result.verified, false);
-    assert.equal(result.reason, 'UNEXPECTED_VCT');
+    assert.equal(result.reason, 'UNEXPECTED_CREDENTIAL_TYPE');
   });
 
   it('detects a tampered element value', async () => {

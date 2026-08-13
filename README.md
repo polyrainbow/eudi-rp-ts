@@ -111,6 +111,28 @@ const result = await verifyAgeOver18SdJwtVc({
 });
 ```
 
+The mdoc counterpart is `verifyAgeOver18Mdoc`, taking a `DeviceResponse` and the
+session transcript it was signed over instead of a credential and a nonce:
+
+```ts
+import { TrustAnchors, verifyAgeOver18Mdoc } from '@sauseschritt/eudi-rp-ts';
+
+const result = await verifyAgeOver18Mdoc({
+  deviceResponse,
+  anchors: TrustAnchors.fromPem(issuerCaPem),
+  sessionTranscript,
+  expectedDocType: 'eu.europa.ec.eudi.pid.1',
+});
+```
+
+Both return `credentialType` rather than `vct` or `docType`. The two formats
+name the same idea differently — see the glossary — and the result type is what
+both produce, so it names neither: the mdoc path used to fill a field called
+`vct` with a doc type. `namespace` on the mdoc call defaults to the doc type,
+which is right for the EUDI PID, where they coincide, and wrong for an ISO mDL,
+where the doc type is `org.iso.18013.5.1.mDL` and the namespace is
+`org.iso.18013.5.1`.
+
 **The demo in `app/` is a demo.** In-memory sessions, no auth, one page. Do not
 deploy it as-is; use the library inside your own service.
 

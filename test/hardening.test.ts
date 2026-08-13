@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { VerificationEvent } from '../src/events.ts';
-import { verifyDeviceResponse } from '../src/mdoc/device-response.ts';
+import { verifyAgeOver18Mdoc, verifyDeviceResponse } from '../src/mdoc/device-response.ts';
 import { buildSessionTranscript } from '../src/mdoc/session-transcript.ts';
 import { verifyMdoc } from '../src/mdoc/verify.ts';
 import { verifyPresentationResponse } from '../src/oid4vp/response.ts';
@@ -191,7 +191,7 @@ describe('verification events', () => {
 
     const rejected = events.find((e) => e.type === 'verification.rejected');
     assert.ok(rejected, 'a rejection must be observable');
-    assert.equal((rejected as { reason: string }).reason, 'UNEXPECTED_VCT');
+    assert.equal((rejected as { reason: string }).reason, 'UNEXPECTED_CREDENTIAL_TYPE');
   });
 
   it('carries no personal data', async () => {
@@ -252,7 +252,7 @@ describe('the audit trail does not depend on the credential format', () => {
 
     const rejected = events.find((e) => e.type === 'verification.rejected');
     assert.ok(rejected, 'a rejection must be observable');
-    assert.equal((rejected as { reason: string }).reason, 'UNEXPECTED_VCT');
+    assert.equal((rejected as { reason: string }).reason, 'UNEXPECTED_CREDENTIAL_TYPE');
     assert.equal((rejected as { format: string }).format, 'mso_mdoc');
   });
 
@@ -314,6 +314,71 @@ describe('exactly one verdict, and the outermost verifier owns it', () => {
     assert.equal(result.verified, false);
     assert.equal(result.reason, 'KEY_BINDING_INVALID');
     assert.ok(events.some((e) => e.type === 'issuer.resolved'));
+    assert.deepEqual(verdicts(events).map((e) => e.type), ['verification.rejected']);
+  });
+
+  it('gives the mdoc counterpart the same verdict discipline', async () => {
+    // verifyAgeOver18Mdoc is the mirror of verifyAgeOver18SdJwtVc, and the
+    // reason it exists is that response.ts used to hand-compose it — carrying
+    // its own copy of the rule this test is about.
+    const { events, onEvent } = record();
+    const result = await verifyAgeOver18Mdoc({
+      deviceResponse: deviceResponseFor(MDOC_CLIENT_ID),
+      anchors: mdocAnchors,
+      sessionTranscript: transcriptFor(MDOC_CLIENT_ID),
+      expectedDocType: PID_MDOC_NAMESPACE,
+      tolerateMalformedValidityDates: true,
+      checkStatus: false,
+      checkCertificateRevocation: false,
+      now: MDOC_NOW,
+      onEvent,
+    });
+
+    assert.equal(result.verified, true, JSON.stringify(result));
+    assert.equal(result.value.ageOver18, true);
+    // The reference PID carries no age attribute, so this is the birth_date route.
+    assert.equal(result.value.evidence, 'birthdate');
+    const accepted = events.find((e) => e.type === 'verification.accepted');
+    assert.equal((accepted as { evidence?: string }).evidence, 'birthdate');
+    assert.deepEqual(verdicts(events).map((e) => e.type), ['verification.accepted']);
+  });
+
+  it('defaults the age namespace to the doc type, which is right for the PID', async () => {
+    // Deliberately no `namespace`. The EUDI PID's namespace and doc type are
+    // both eu.europa.ec.eudi.pid.1; an mDL's are not, which is why the option
+    // exists at all.
+    const result = await verifyAgeOver18Mdoc({
+      deviceResponse: deviceResponseFor(MDOC_CLIENT_ID),
+      anchors: mdocAnchors,
+      sessionTranscript: transcriptFor(MDOC_CLIENT_ID),
+      tolerateMalformedValidityDates: true,
+      checkStatus: false,
+      checkCertificateRevocation: false,
+      now: MDOC_NOW,
+    });
+
+    assert.equal(result.verified, true, JSON.stringify(result));
+  });
+
+  it('reports a predicate it cannot evaluate rather than an acceptance', async () => {
+    // A namespace with no elements in it: the device response is perfectly
+    // good and the predicate has nothing to read, which must not be recorded
+    // as an acceptance.
+    const { events, onEvent } = record();
+    const result = await verifyAgeOver18Mdoc({
+      deviceResponse: deviceResponseFor(MDOC_CLIENT_ID),
+      anchors: mdocAnchors,
+      sessionTranscript: transcriptFor(MDOC_CLIENT_ID),
+      namespace: 'org.iso.18013.5.1',
+      tolerateMalformedValidityDates: true,
+      checkStatus: false,
+      checkCertificateRevocation: false,
+      now: MDOC_NOW,
+      onEvent,
+    });
+
+    assert.equal(result.verified, false);
+    assert.equal(result.reason, 'PREDICATE_CLAIM_MISSING');
     assert.deepEqual(verdicts(events).map((e) => e.type), ['verification.rejected']);
   });
 

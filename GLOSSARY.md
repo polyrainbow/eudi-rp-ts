@@ -132,7 +132,12 @@ nonce and response URI. **(used here)**
 **`vct` vs `doctype`** — the same idea in the two formats. `vct` is a URI-ish
 string in SD-JWT VC (`urn:eudi:pid:1`); `doctype` is a reverse-DNS string in
 mdoc (`eu.europa.ec.eudi.pid.1`). They are *not* interchangeable and the same
-credential has different values for each.
+credential has different values for each. Because the idea is shared and the
+two names are not, this codebase calls the union `credentialType` wherever a
+value could be either — on `VerifiedCredential`, on the events, and in the
+`UNEXPECTED_CREDENTIAL_TYPE` reason code. Format-specific spellings survive
+where they are genuinely format-specific: `expectedVct`, `expectedDocType`,
+`VerifiedMdoc.docType`. **(used here)**
 
 ---
 
