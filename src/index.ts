@@ -13,17 +13,22 @@
 export type { Outcome, Rejected, ReasonCode, Verified } from './result.ts';
 export { accept, reject } from './result.ts';
 
-// Credential verification.
-export { verifyCredential, verifyAgeOver18 } from './verify.ts';
+// SD-JWT VC verification. The mdoc half is `verifyMdoc`, further down — one of
+// two formats each, neither of them "the credential" in general.
+//
+// `VerifiedCredential` is the exception and is meant to be: it is the shared
+// result shape both formats produce, which is why the mdoc path in
+// `oid4vp/response.ts` returns one too.
+export { verifySdJwtVc, verifyAgeOver18SdJwtVc } from './verify.ts';
 export type {
   AgeResult,
   KeyBindingExpectation,
   VerifiedCredential,
-  VerifyCredentialOptions,
+  VerifySdJwtVcOptions,
 } from './verify.ts';
 
 // The age predicate, usable on its own against already-verified claims.
-export { evaluateAgeOver18, evaluateAgeOver18Mdoc } from './predicate/age.ts';
+export { evaluateAgeOver18SdJwt, evaluateAgeOver18Mdoc } from './predicate/age.ts';
 export type { AgeEvidence } from './predicate/age.ts';
 
 // Trust anchors: pinned, or from an ETSI TS 119 612 trust list.

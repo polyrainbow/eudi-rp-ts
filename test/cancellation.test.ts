@@ -9,7 +9,7 @@ import { PID_MDOC_NAMESPACE } from '../src/oid4vp/query.ts';
 import type { Outcome, ReasonCode, Rejected } from '../src/result.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { createStatusListCache } from '../src/trust/status.ts';
-import { verifyAgeOver18, verifyCredential } from '../src/verify.ts';
+import { verifyAgeOver18SdJwtVc, verifySdJwtVc } from '../src/verify.ts';
 
 const dir = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const fixtures = JSON.parse(readFileSync(`${dir}credentials.json`, 'utf8'));
@@ -104,7 +104,7 @@ describe('the caller\'s signal reaches the fetch', () => {
 describe('cancelling a verification', () => {
   it('does no work at all when the signal has already fired', async () => {
     let called = false;
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       statusFetch: (() => {
         called = true;
@@ -153,7 +153,7 @@ describe('cancelling a verification', () => {
     // The distinction the reason code exists for: blaming STATUS_UNAVAILABLE on
     // an issuer whose endpoint was answering fine, for a deadline we set,
     // sends an operator to look at the wrong system.
-    const result = await verifyAgeOver18({ ...base, statusFetch: hangs, signal: abortingSoon() });
+    const result = await verifyAgeOver18SdJwtVc({ ...base, statusFetch: hangs, signal: abortingSoon() });
 
     assertRejected(result, 'VERIFICATION_ABORTED');
   });
@@ -161,7 +161,7 @@ describe('cancelling a verification', () => {
   it('still reports a genuinely unreachable status endpoint as unavailable', async () => {
     // The other half of the pair. Same hanging endpoint, no caller signal —
     // only the per-request deadline — and the blame goes back to the issuer.
-    const result = await verifyAgeOver18({ ...base, statusFetch: hangs, statusTimeoutMs: 20 });
+    const result = await verifyAgeOver18SdJwtVc({ ...base, statusFetch: hangs, statusTimeoutMs: 20 });
 
     assertRejected(result, 'STATUS_UNAVAILABLE');
   });
@@ -200,7 +200,7 @@ describe('a cancellation is not remembered as an outage', () => {
     // nothing to do with it.
     const cache = createStatusListCache();
 
-    const cancelled = await verifyAgeOver18({
+    const cancelled = await verifyAgeOver18SdJwtVc({
       ...base,
       statusFetch: hangs,
       statusCache: cache,
@@ -208,7 +208,7 @@ describe('a cancellation is not remembered as an outage', () => {
     });
     assertRejected(cancelled, 'VERIFICATION_ABORTED');
 
-    const next = await verifyAgeOver18({
+    const next = await verifyAgeOver18SdJwtVc({
       ...base,
       statusFetch: serving(fixtures.statusLists.valid as string),
       statusCache: cache,
@@ -227,8 +227,8 @@ describe('a cancellation is not remembered as an outage', () => {
       return new Response('nope', { status: 503 });
     }) as typeof fetch;
 
-    await verifyAgeOver18({ ...base, statusFetch: failing, statusCache: cache });
-    await verifyAgeOver18({ ...base, statusFetch: failing, statusCache: cache });
+    await verifyAgeOver18SdJwtVc({ ...base, statusFetch: failing, statusCache: cache });
+    await verifyAgeOver18SdJwtVc({ ...base, statusFetch: failing, statusCache: cache });
 
     assert.equal(calls, 1, 'the second verification should have been served the remembered failure');
   });

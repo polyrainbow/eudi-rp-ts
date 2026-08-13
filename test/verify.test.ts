@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { TrustAnchors } from '../src/trust/anchors.ts';
-import { verifyAgeOver18, verifyCredential } from '../src/verify.ts';
+import { verifyAgeOver18SdJwtVc, verifySdJwtVc } from '../src/verify.ts';
 import type { Outcome, ReasonCode, Rejected } from '../src/result.ts';
 
 const dir = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -43,9 +43,9 @@ function assertRejected(
   assert.equal((outcome as Rejected).reason, reason, `detail was: ${(outcome as Rejected).detail}`);
 }
 
-describe('verifyAgeOver18', () => {
+describe('verifyAgeOver18SdJwtVc', () => {
   it('accepts a valid presentation and reports the privacy-preserving evidence', async () => {
-    const result = await verifyAgeOver18({ ...baseOptions, credential: credential('over18') });
+    const result = await verifyAgeOver18SdJwtVc({ ...baseOptions, credential: credential('over18') });
 
     assert.equal(result.verified, true, JSON.stringify(result));
     assert.equal(result.value.ageOver18, true);
@@ -55,7 +55,7 @@ describe('verifyAgeOver18', () => {
   });
 
   it('does not learn anything the holder did not disclose', async () => {
-    const result = await verifyAgeOver18({ ...baseOptions, credential: credential('over18') });
+    const result = await verifyAgeOver18SdJwtVc({ ...baseOptions, credential: credential('over18') });
 
     assert.equal(result.verified, true);
     // The holder disclosed only age_equal_or_over["18"]. Everything else in the
@@ -67,12 +67,12 @@ describe('verifyAgeOver18', () => {
   });
 
   it('rejects a holder who is under 18', async () => {
-    const result = await verifyAgeOver18({ ...baseOptions, credential: credential('under18') });
+    const result = await verifyAgeOver18SdJwtVc({ ...baseOptions, credential: credential('under18') });
     assertRejected(result, 'PREDICATE_NOT_SATISFIED');
   });
 
   it('falls back to birthdate when the issuer omits age_equal_or_over', async () => {
-    const result = await verifyAgeOver18({
+    const result = await verifyAgeOver18SdJwtVc({
       ...baseOptions,
       credential: credential('birthdateOnly'),
     });
@@ -83,17 +83,17 @@ describe('verifyAgeOver18', () => {
 
   it('reports a missing predicate rather than guessing', async () => {
     // Verified credential, but nothing age-related was disclosed.
-    const result = await verifyCredential({ ...baseOptions, credential: credential('over18') });
+    const result = await verifySdJwtVc({ ...baseOptions, credential: credential('over18') });
     assert.equal(result.verified, true);
 
-    const { evaluateAgeOver18 } = await import('../src/predicate/age.ts');
-    assertRejected(evaluateAgeOver18({ vct: 'urn:eudi:pid:1' }, NOW), 'PREDICATE_CLAIM_MISSING');
+    const { evaluateAgeOver18SdJwt } = await import('../src/predicate/age.ts');
+    assertRejected(evaluateAgeOver18SdJwt({ vct: 'urn:eudi:pid:1' }, NOW), 'PREDICATE_CLAIM_MISSING');
   });
 });
 
 describe('issuer trust', () => {
   it('rejects a credential whose chain does not reach a trust anchor', async () => {
-    const result = await verifyAgeOver18({
+    const result = await verifyAgeOver18SdJwtVc({
       ...baseOptions,
       credential: credential('untrustedIssuer'),
     });
@@ -101,7 +101,7 @@ describe('issuer trust', () => {
   });
 
   it('rejects a valid credential when checked against the wrong anchor set', async () => {
-    const result = await verifyAgeOver18({
+    const result = await verifyAgeOver18SdJwtVc({
       ...baseOptions,
       anchors: rogueAnchors,
       credential: credential('over18'),
@@ -116,7 +116,7 @@ describe('issuer trust', () => {
     const tampered = [`${header}.${payload}.${flipped}`, ...rest].join('~');
 
     assertRejected(
-      await verifyAgeOver18({ ...baseOptions, credential: tampered }),
+      await verifyAgeOver18SdJwtVc({ ...baseOptions, credential: tampered }),
       'ISSUER_SIGNATURE_INVALID',
     );
   });
@@ -129,14 +129,14 @@ describe('issuer trust', () => {
     ).toString('base64url');
     const tampered = [parts[0], forged, ...parts.slice(2)].join('~');
 
-    const result = await verifyAgeOver18({ ...baseOptions, credential: tampered });
+    const result = await verifyAgeOver18SdJwtVc({ ...baseOptions, credential: tampered });
     // The forged disclosure no longer hashes to any digest in the signed payload.
     assertRejected(result, 'CREDENTIAL_MALFORMED');
     assert.match(result.detail, /Unreferenced disclosure/);
   });
 
   it('rejects an expired credential', async () => {
-    const result = await verifyAgeOver18({
+    const result = await verifyAgeOver18SdJwtVc({
       ...baseOptions,
       credential: credential('over18'),
       now: new Date('2028-01-01T00:00:00Z'),
@@ -145,7 +145,7 @@ describe('issuer trust', () => {
   });
 
   it('rejects an unexpected vct', async () => {
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...baseOptions,
       credential: credential('over18'),
       expectedVct: 'urn:eudi:something-else:1',
@@ -156,7 +156,7 @@ describe('issuer trust', () => {
 
 describe('key binding', () => {
   it('rejects a presentation bound to a different verifier', async () => {
-    const result = await verifyAgeOver18({
+    const result = await verifyAgeOver18SdJwtVc({
       ...baseOptions,
       credential: credential('wrongAudience'),
     });
@@ -164,12 +164,12 @@ describe('key binding', () => {
   });
 
   it('rejects a replayed nonce', async () => {
-    const result = await verifyAgeOver18({ ...baseOptions, credential: credential('wrongNonce') });
+    const result = await verifyAgeOver18SdJwtVc({ ...baseOptions, credential: credential('wrongNonce') });
     assertRejected(result, 'KEY_BINDING_NONCE_MISMATCH');
   });
 
   it('rejects a presentation with no key binding at all', async () => {
-    const result = await verifyAgeOver18({ ...baseOptions, credential: credential('noKeyBinding') });
+    const result = await verifyAgeOver18SdJwtVc({ ...baseOptions, credential: credential('noKeyBinding') });
     assertRejected(result, 'KEY_BINDING_MISSING');
   });
 
@@ -179,7 +179,7 @@ describe('key binding', () => {
     // unbound presentation being accepted.
     await assert.rejects(
       () =>
-        verifyCredential({
+        verifySdJwtVc({
           anchors,
           credential: credential('over18'),
           now: NOW,

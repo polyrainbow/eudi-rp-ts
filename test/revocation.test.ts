@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createRevocationCache } from '../src/trust/revocation.ts';
 import type { Outcome, ReasonCode, Rejected } from '../src/result.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
-import { verifyCredential } from '../src/verify.ts';
+import { verifySdJwtVc } from '../src/verify.ts';
 
 /**
  * Certificate revocation: CRL and OCSP.
@@ -67,13 +67,13 @@ function assertRejected(outcome: Outcome<unknown>, reason: ReasonCode): asserts 
 
 describe('certificate revocation by CRL', () => {
   it('accepts a certificate the CRL does not list', async () => {
-    const result = await verifyCredential({ ...base, revocationFetch: serving({ crl: revocation.crls.good }) });
+    const result = await verifySdJwtVc({ ...base, revocationFetch: serving({ crl: revocation.crls.good }) });
 
     assert.equal(result.verified, true, JSON.stringify(result));
   });
 
   it('rejects a certificate the CRL lists', async () => {
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ crl: revocation.crls.revoked }),
     });
@@ -88,7 +88,7 @@ describe('certificate revocation by CRL', () => {
   it('accepts when the CRL lists a different certificate', async () => {
     // Without this the previous test would pass against an implementation that
     // rejects any CRL with entries in it, never comparing serial numbers.
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ crl: revocation.crls.someoneElseRevoked }),
     });
@@ -99,7 +99,7 @@ describe('certificate revocation by CRL', () => {
   it('refuses a CRL that is past its nextUpdate', async () => {
     // A stale CRL says nothing about revocations since it was published, so
     // accepting one turns "the CA stopped publishing" into "nothing revoked".
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ crl: revocation.crls.expired }),
     });
@@ -111,7 +111,7 @@ describe('certificate revocation by CRL', () => {
   it('refuses a CRL with no nextUpdate at all', async () => {
     // Its freshness cannot be bounded, so a replayed copy from any point in the
     // past would be indistinguishable from the current one.
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ crl: revocation.crls.noNextUpdate }),
     });
@@ -123,7 +123,7 @@ describe('certificate revocation by CRL', () => {
   it('refuses a CRL signed by anyone but the issuing CA', async () => {
     // The whole point of verifying it: otherwise anyone who can answer the
     // request could declare a revoked certificate good.
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ crl: revocation.crls.wrongSigner }),
     });
@@ -133,7 +133,7 @@ describe('certificate revocation by CRL', () => {
   });
 
   it('fails closed when the distribution point is unreachable', async () => {
-    const result = await verifyCredential({ ...base, revocationFetch: serving({}) });
+    const result = await verifySdJwtVc({ ...base, revocationFetch: serving({}) });
 
     assertRejected(result, 'ISSUER_REVOCATION_UNAVAILABLE');
   });
@@ -141,13 +141,13 @@ describe('certificate revocation by CRL', () => {
 
 describe('certificate revocation by OCSP', () => {
   it('accepts a good response', async () => {
-    const result = await verifyCredential({ ...base, revocationFetch: serving({ ocsp: revocation.ocsp.good }) });
+    const result = await verifySdJwtVc({ ...base, revocationFetch: serving({ ocsp: revocation.ocsp.good }) });
 
     assert.equal(result.verified, true, JSON.stringify(result));
   });
 
   it('rejects a revoked response', async () => {
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ ocsp: revocation.ocsp.revoked }),
     });
@@ -159,7 +159,7 @@ describe('certificate revocation by OCSP', () => {
   it('treats "unknown" as unavailable rather than good', async () => {
     // The responder saying it does not vouch for this certificate is not a
     // clean bill of health.
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ ocsp: revocation.ocsp.unknown }),
     });
@@ -169,7 +169,7 @@ describe('certificate revocation by OCSP', () => {
   });
 
   it('refuses a response past its nextUpdate', async () => {
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ ocsp: revocation.ocsp.expired }),
     });
@@ -180,7 +180,7 @@ describe('certificate revocation by OCSP', () => {
 
   it('reports a responder that declines to answer', async () => {
     // responseStatus 3 is tryLater — a well-formed refusal, not a status.
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ ocsp: revocation.ocsp.tryLater }),
     });
@@ -190,7 +190,7 @@ describe('certificate revocation by OCSP', () => {
   });
 
   it('accepts a delegated responder the CA authorised', async () => {
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ ocsp: revocation.ocsp.delegated }),
     });
@@ -199,7 +199,7 @@ describe('certificate revocation by OCSP', () => {
   });
 
   it('rejects a revocation from a delegated responder', async () => {
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ ocsp: revocation.ocsp.delegatedRevoked }),
     });
@@ -210,7 +210,7 @@ describe('certificate revocation by OCSP', () => {
   it('refuses a delegate without the OCSPSigning extended key usage', async () => {
     // Otherwise any certificate the CA ever issued could answer for every
     // certificate the CA ever issued — including for itself.
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ ocsp: revocation.ocsp.delegatedWithoutEku }),
     });
@@ -225,7 +225,7 @@ describe('choosing between the two mechanisms', () => {
     // The CRL here would say revoked. OCSP says good and is asked first, so a
     // fresher answer wins over a staler one.
     const requested: string[] = [];
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: (async (url: string, init: RequestInit) => {
         requested.push(String(url));
@@ -240,7 +240,7 @@ describe('choosing between the two mechanisms', () => {
   it('falls back to the CRL when the responder is down', async () => {
     // Two mechanisms both being unreachable is a different situation from one
     // being unreachable, and only the first should sink the verification.
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ crl: revocation.crls.good }),
     });
@@ -249,7 +249,7 @@ describe('choosing between the two mechanisms', () => {
   });
 
   it('still rejects when the responder is down and the CRL says revoked', async () => {
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       revocationFetch: serving({ crl: revocation.crls.revoked }),
     });
@@ -264,7 +264,7 @@ describe('when there is nothing to check', () => {
     // published nothing has not told us something we are ignoring, so this is
     // a pass rather than a failure — the one case that is not fail-closed.
     let fetched = false;
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       credential: fixtures.credentials.over18,
       revocationFetch: (async () => {
@@ -279,7 +279,7 @@ describe('when there is nothing to check', () => {
 
   it('fetches nothing when the check is turned off', async () => {
     let fetched = false;
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       checkCertificateRevocation: false,
       revocationFetch: (async () => {
@@ -340,8 +340,8 @@ describe('caching', () => {
       return serving({ crl: revocation.crls.good })(url as never, init as never);
     }) as unknown as typeof fetch;
 
-    const first = await verifyCredential({ ...base, revocationFetch: counting, revocationCache: cache });
-    const second = await verifyCredential({ ...base, revocationFetch: counting, revocationCache: cache });
+    const first = await verifySdJwtVc({ ...base, revocationFetch: counting, revocationCache: cache });
+    const second = await verifySdJwtVc({ ...base, revocationFetch: counting, revocationCache: cache });
 
     assert.equal(first.verified, true, JSON.stringify(first));
     assert.equal(second.verified, true);

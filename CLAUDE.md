@@ -80,7 +80,7 @@ failure mode means adding or reusing a code, not a new error string.
   that reason.
 - `@sd-jwt/*` requires the KB-JWT `aud` to exist but never compares it to the verifier's own
   identifier. `src/verify.ts` checks it explicitly, twice (before and after library verification).
-  Key binding is verified only when a nonce is supplied, which is why `verifyCredential` throws
+  Key binding is verified only when a nonce is supplied, which is why `verifySdJwtVc` throws
   rather than defaulting `requireKeyBinding`.
 - `xml-crypto` ships no RSASSA-PSS, which several member states' trust lists use.
   `src/trust/lotl.ts` implements it.
@@ -153,8 +153,8 @@ Two invariants there, both pinned by tests in the same file:
   id, which is the application's to add because the library has no notion of a session. It logs
   every event field verbatim on purpose: the no-personal-data guarantee is the library's and is
   tested there, so re-deciding it in the consumer would turn a tested property into an assumed one.
-- **Exactly one verdict per verification, owned by the outermost verifier.** `verifyCredential` and
-  `verifyMdoc` are entry points *and* steps inside `verifyAgeOver18`, `verifyDeviceResponse` and
+- **Exactly one verdict per verification, owned by the outermost verifier.** `verifySdJwtVc` and
+  `verifyMdoc` are entry points *and* steps inside `verifyAgeOver18SdJwtVc`, `verifyDeviceResponse` and
   `verifyPresentationResponse`, each of which can still reject what the inner one accepted. The
   outer ones therefore wrap the sink in `withoutVerdict` and emit the terminal event themselves. Any
   new wrapper around a verifier has to do the same, or the trail records an acceptance the caller
@@ -171,6 +171,14 @@ Two invariants there, both pinned by tests in the same file:
   that looks wrong without context. Match that; don't add comments restating the code.
 - Spec citations are precise (e.g. "OID4VP 1.0 §14.8", "RFC 9901"). Keep them accurate rather than
   approximate.
+- **"Credential" is format-neutral, and no identifier may claim it for one format.** An mdoc is a
+  credential; so is an SD-JWT VC. Anything handling exactly one of them says which —
+  `verifySdJwtVc` / `verifyMdoc`, `evaluateAgeOver18SdJwt` / `evaluateAgeOver18Mdoc` — and the bare
+  word is reserved for what genuinely spans both: the `CREDENTIAL_*` reason codes, `VerifiedCredential`,
+  the glossary. This was not always true. `verifyCredential` took the general name when SD-JWT VC was
+  the only format implemented and kept it after mdoc arrived, which left the same word meaning "either
+  format" in the reason codes and "SD-JWT VC only" in the entry point beside them. A new format must
+  not have to be told it is the exception.
 
 ## Tests
 

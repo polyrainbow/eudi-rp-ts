@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { Outcome, ReasonCode, Rejected } from '../src/result.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { checkStatusList, createStatusListCache } from '../src/trust/status.ts';
-import { verifyAgeOver18 } from '../src/verify.ts';
+import { verifyAgeOver18SdJwtVc } from '../src/verify.ts';
 
 const dir = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const fixtures = JSON.parse(readFileSync(`${dir}credentials.json`, 'utf8'));
@@ -36,14 +36,14 @@ function assertRejected(outcome: Outcome<unknown>, reason: ReasonCode): asserts 
 
 describe('status list', () => {
   it('accepts a credential whose status bit is clear', async () => {
-    const result = await verifyAgeOver18({ ...base, statusFetch: serving(fixtures.statusLists.valid) });
+    const result = await verifyAgeOver18SdJwtVc({ ...base, statusFetch: serving(fixtures.statusLists.valid) });
 
     assert.equal(result.verified, true, JSON.stringify(result));
     assert.equal(result.value.ageOver18, true);
   });
 
   it('rejects a revoked credential', async () => {
-    const result = await verifyAgeOver18({ ...base, statusFetch: serving(fixtures.statusLists.revoked) });
+    const result = await verifyAgeOver18SdJwtVc({ ...base, statusFetch: serving(fixtures.statusLists.revoked) });
 
     assertRejected(result, 'CREDENTIAL_REVOKED');
   });
@@ -51,7 +51,7 @@ describe('status list', () => {
   it('rejects a status list signed by an untrusted key', async () => {
     // The whole point of verifying the list: otherwise anyone who can answer
     // the HTTP request could declare a revoked credential valid.
-    const result = await verifyAgeOver18({
+    const result = await verifyAgeOver18SdJwtVc({
       ...base,
       statusFetch: serving(fixtures.statusLists.untrustedSigner),
     });
@@ -60,7 +60,7 @@ describe('status list', () => {
   });
 
   it('rejects a status list served under the wrong content type', async () => {
-    const result = await verifyAgeOver18({
+    const result = await verifyAgeOver18SdJwtVc({
       ...base,
       statusFetch: serving(fixtures.statusLists.valid, 'text/html'),
     });
@@ -71,7 +71,7 @@ describe('status list', () => {
   it('fails closed when the status endpoint is unreachable', async () => {
     // A verifier that accepts a credential it could not check has no revocation
     // at all, so an unavailable list must not degrade into success.
-    const result = await verifyAgeOver18({ ...base, statusFetch: failing(503) });
+    const result = await verifyAgeOver18SdJwtVc({ ...base, statusFetch: failing(503) });
 
     assertRejected(result, 'STATUS_UNAVAILABLE');
   });
@@ -83,7 +83,7 @@ describe('status list', () => {
       return new Response('', { status: 500 });
     }) as typeof fetch;
 
-    const result = await verifyAgeOver18({
+    const result = await verifyAgeOver18SdJwtVc({
       ...base,
       credential: fixtures.credentials.over18,
       statusFetch: spy,
@@ -102,11 +102,11 @@ describe('status list', () => {
       return new Response('', { status: 503 });
     }) as typeof fetch;
 
-    await verifyAgeOver18({ ...base, statusFetch: spy });
+    await verifyAgeOver18SdJwtVc({ ...base, statusFetch: spy });
     assert.equal(fetched, true);
 
     fetched = false;
-    await verifyAgeOver18({ ...base, statusFetch: spy, checkStatus: false });
+    await verifyAgeOver18SdJwtVc({ ...base, statusFetch: spy, checkStatus: false });
     assert.equal(fetched, false, 'checkStatus: false must skip the fetch');
   });
 
@@ -115,7 +115,7 @@ describe('status list', () => {
     // Binding `sub` to the URI the credential named is what proves it is *this*
     // credential's list — without it, anyone who can answer at that URI can
     // substitute another list the same anchors validate, and we index into it.
-    const result = await verifyAgeOver18({
+    const result = await verifyAgeOver18SdJwtVc({
       ...base,
       statusFetch: serving(fixtures.statusLists.wrongSubject),
     });
@@ -129,7 +129,7 @@ describe('status list', () => {
     // verifier and throws, so a check made in the verifier callback would run
     // too late to record anything — and the rejection would surface as
     // CREDENTIAL_MALFORMED, blaming the credential for the issuer's stale list.
-    const result = await verifyAgeOver18({
+    const result = await verifyAgeOver18SdJwtVc({
       ...base,
       statusFetch: serving(fixtures.statusLists.expired),
     });
@@ -145,10 +145,10 @@ describe('status list', () => {
     const cache = createStatusListCache();
     const statusFetch = serving(fixtures.statusLists.expiringSoon);
 
-    const fresh = await verifyAgeOver18({ ...base, statusFetch, statusCache: cache });
+    const fresh = await verifyAgeOver18SdJwtVc({ ...base, statusFetch, statusCache: cache });
     assert.equal(fresh.verified, true, JSON.stringify(fresh));
 
-    const stale = await verifyAgeOver18({
+    const stale = await verifyAgeOver18SdJwtVc({
       ...base,
       statusFetch,
       statusCache: cache,
@@ -202,8 +202,8 @@ describe('status list', () => {
       return new Response('', { status: 503 });
     }) as typeof fetch;
 
-    const first = await verifyAgeOver18({ ...base, statusFetch: down, statusCache: cache });
-    const second = await verifyAgeOver18({ ...base, statusFetch: down, statusCache: cache });
+    const first = await verifyAgeOver18SdJwtVc({ ...base, statusFetch: down, statusCache: cache });
+    const second = await verifyAgeOver18SdJwtVc({ ...base, statusFetch: down, statusCache: cache });
 
     assertRejected(first, 'STATUS_UNAVAILABLE');
     assertRejected(second, 'STATUS_UNAVAILABLE');

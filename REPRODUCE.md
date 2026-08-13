@@ -111,11 +111,11 @@ At the time of writing that URL is
 Then verify with the library:
 
 ```ts
-import { TrustAnchors, verifyAgeOver18, verifyMdoc } from '@sauseschritt/eudi-rp-ts';
+import { TrustAnchors, verifyAgeOver18SdJwtVc, verifyMdoc } from '@sauseschritt/eudi-rp-ts';
 
 const anchors = TrustAnchors.fromPem(readFileSync('pid-issuer-ca.pem', 'utf8'));
 
-await verifyAgeOver18({
+await verifyAgeOver18SdJwtVc({
   credential: readFileSync('out/eudiw-pid-sd-jwt-vc.txt', 'utf8').trim(),
   anchors, expectedVct: 'urn:eudi:pid:1',
   requireKeyBinding: false,   // issued, never presented, so no KB-JWT

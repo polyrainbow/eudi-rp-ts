@@ -11,7 +11,7 @@ import { verifyPresentationResponse } from '../src/oid4vp/response.ts';
 import { PID_MDOC_NAMESPACE } from '../src/oid4vp/query.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { resolveIssuerKeyFromX5c } from '../src/trust/issuer-key.ts';
-import { verifyAgeOver18, verifyCredential } from '../src/verify.ts';
+import { verifyAgeOver18SdJwtVc, verifySdJwtVc } from '../src/verify.ts';
 import { buildDeviceResponse } from './mdoc-wallet.ts';
 
 const dir = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -90,7 +90,7 @@ describe('reason codes are derived from state, not error text', () => {
     const disclosure = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString()) as [string, string, boolean];
     const forged = Buffer.from(JSON.stringify([disclosure[0], disclosure[1], true])).toString('base64url');
 
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       credential: [parts[0], forged, ...parts.slice(2)].join('~'),
     });
@@ -104,7 +104,7 @@ describe('reason codes are derived from state, not error text', () => {
     const [header, payload, signature] = jwt!.split('.');
     const flipped = `${signature!.slice(0, -2)}${signature!.slice(-2) === 'AA' ? 'BB' : 'AA'}`;
 
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       credential: [`${header}.${payload}.${flipped}`, ...rest].join('~'),
     });
@@ -148,7 +148,7 @@ describe('certificate path validation', () => {
   });
 
   it('can require an extended key usage on the issuer certificate', async () => {
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       ...base,
       pathValidation: { requiredExtendedKeyUsage: ['1.0.18013.5.1.2'] },
     });
@@ -161,14 +161,14 @@ describe('certificate path validation', () => {
 
 describe('algorithm policy', () => {
   it('rejects an algorithm outside the allowed set', async () => {
-    const result = await verifyCredential({ ...base, allowedAlgs: ['ES384'] });
+    const result = await verifySdJwtVc({ ...base, allowedAlgs: ['ES384'] });
 
     assert.equal(result.verified, false);
     assert.equal(result.reason, 'UNSUPPORTED_ALGORITHM');
   });
 
   it('accepts when the credential\'s algorithm is allowed', async () => {
-    const result = await verifyCredential({ ...base, allowedAlgs: ['ES256', 'ES384'] });
+    const result = await verifySdJwtVc({ ...base, allowedAlgs: ['ES256', 'ES384'] });
     assert.equal(result.verified, true, JSON.stringify(result));
   });
 });
@@ -176,7 +176,7 @@ describe('algorithm policy', () => {
 describe('verification events', () => {
   it('reports the sequence of an accepted verification', async () => {
     const events: VerificationEvent[] = [];
-    const result = await verifyCredential({ ...base, onEvent: (e) => events.push(e) });
+    const result = await verifySdJwtVc({ ...base, onEvent: (e) => events.push(e) });
 
     assert.equal(result.verified, true);
     assert.deepEqual(
@@ -187,7 +187,7 @@ describe('verification events', () => {
 
   it('reports a rejection with its reason', async () => {
     const events: VerificationEvent[] = [];
-    await verifyCredential({ ...base, expectedVct: 'urn:eudi:other:1', onEvent: (e) => events.push(e) });
+    await verifySdJwtVc({ ...base, expectedVct: 'urn:eudi:other:1', onEvent: (e) => events.push(e) });
 
     const rejected = events.find((e) => e.type === 'verification.rejected');
     assert.ok(rejected, 'a rejection must be observable');
@@ -197,7 +197,7 @@ describe('verification events', () => {
   it('carries no personal data', async () => {
     // An audit trail that accumulates dates of birth is worse than none.
     const events: VerificationEvent[] = [];
-    await verifyCredential({ ...base, onEvent: (e) => events.push(e) });
+    await verifySdJwtVc({ ...base, onEvent: (e) => events.push(e) });
 
     const serialised = JSON.stringify(events);
     for (const secret of ['Mustermann', 'Erika', '1990-06-12', 'age_equal_or_over']) {
@@ -220,7 +220,7 @@ describe('the audit trail does not depend on the credential format', () => {
 
   it('emits the same sequence for mdoc as for SD-JWT VC', async () => {
     const sd = record();
-    await verifyCredential({ ...base, onEvent: sd.onEvent });
+    await verifySdJwtVc({ ...base, onEvent: sd.onEvent });
 
     const md = record();
     const result = await verifyMdoc({ ...mdocBase, onEvent: md.onEvent });
@@ -232,7 +232,7 @@ describe('the audit trail does not depend on the credential format', () => {
 
   it('names the format, so a mixed stream stays readable', async () => {
     const sd = record();
-    await verifyCredential({ ...base, onEvent: sd.onEvent });
+    await verifySdJwtVc({ ...base, onEvent: sd.onEvent });
     const md = record();
     await verifyMdoc({ ...mdocBase, onEvent: md.onEvent });
 
@@ -282,7 +282,7 @@ describe('exactly one verdict, and the outermost verifier owns it', () => {
 
   it('records a rejection, not an acceptance, when the predicate fails', async () => {
     const { events, onEvent } = record();
-    const result = await verifyAgeOver18({
+    const result = await verifyAgeOver18SdJwtVc({
       ...base,
       credential: fixtures.credentials.under18 as string,
       onEvent,
@@ -322,7 +322,7 @@ describe('exactly one verdict, and the outermost verifier owns it', () => {
     // question: the boolean discloses nothing else, the birthdate discloses a
     // date of birth. A relying party auditing what it learned needs to see it.
     const { events, onEvent } = record();
-    const result = await verifyAgeOver18({ ...base, onEvent });
+    const result = await verifyAgeOver18SdJwtVc({ ...base, onEvent });
 
     assert.equal(result.verified, true);
     const accepted = events.find((e) => e.type === 'verification.accepted');

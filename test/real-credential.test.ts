@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { verifyMdoc } from '../src/mdoc/verify.ts';
-import { evaluateAgeOver18 } from '../src/predicate/age.ts';
+import { evaluateAgeOver18SdJwt } from '../src/predicate/age.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
-import { verifyAgeOver18, verifyCredential } from '../src/verify.ts';
+import { verifyAgeOver18SdJwtVc, verifySdJwtVc } from '../src/verify.ts';
 
 /**
  * Verification of a genuine credential from the EU reference issuer.
@@ -40,7 +40,7 @@ const options = {
 
 describe('real EUDI reference credential', () => {
   it('verifies against the real PID Issuer CA', async () => {
-    const result = await verifyCredential(options);
+    const result = await verifySdJwtVc(options);
 
     assert.equal(result.verified, true, JSON.stringify(result));
     assert.equal(result.value.vct, 'urn:eudi:pid:1');
@@ -51,14 +51,14 @@ describe('real EUDI reference credential', () => {
     const ours = TrustAnchors.fromPem(
       readFileSync(fileURLToPath(new URL('./fixtures/trust-anchor.pem', import.meta.url)), 'utf8'),
     );
-    const result = await verifyCredential({ ...options, anchors: ours });
+    const result = await verifySdJwtVc({ ...options, anchors: ours });
 
     assert.equal(result.verified, false);
     assert.equal(result.reason, 'ISSUER_UNTRUSTED');
   });
 
   it('proves age over 18 from birthdate, because the issuer emits no age claim', async () => {
-    const result = await verifyAgeOver18(options);
+    const result = await verifyAgeOver18SdJwtVc(options);
 
     assert.equal(result.verified, true, JSON.stringify(result));
     assert.equal(result.value.ageOver18, true);
@@ -69,7 +69,7 @@ describe('real EUDI reference credential', () => {
   });
 
   it('carries a token status list', async () => {
-    const result = await verifyCredential(options);
+    const result = await verifySdJwtVc(options);
     assert.equal(result.verified, true);
 
     const status = result.value.claims['status'] as
@@ -83,8 +83,8 @@ describe('real EUDI reference credential', () => {
     // Same credential, evaluated as though "now" were shortly after the birth
     // date — guards against the predicate passing on presence rather than value.
     const claims = { birthdate: '1990-06-12' };
-    assert.equal(evaluateAgeOver18(claims, new Date('2005-01-01T00:00:00Z')).verified, false);
-    assert.equal(evaluateAgeOver18(claims, new Date('2008-06-12T00:00:00Z')).verified, true);
+    assert.equal(evaluateAgeOver18SdJwt(claims, new Date('2005-01-01T00:00:00Z')).verified, false);
+    assert.equal(evaluateAgeOver18SdJwt(claims, new Date('2008-06-12T00:00:00Z')).verified, true);
   });
 });
 
@@ -183,7 +183,7 @@ describe('real status list (network)', { skip: process.env['RUN_NETWORK_TESTS'] 
     // Exercises the whole path against real infrastructure: fetch with the
     // statuslist+jwt content type, verify the list's own signature against the
     // same PID Issuer CA, and read the bit for this credential.
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       credential,
       anchors,
       expectedVct: 'urn:eudi:pid:1',
@@ -204,7 +204,7 @@ describe('real status list (network)', { skip: process.env['RUN_NETWORK_TESTS'] 
     // Both the PID document signer and its CA publish a CRL, and neither runs
     // an OCSP responder — so this is the only revocation mechanism the real EU
     // infrastructure offers, and the only one this can exercise for real.
-    const result = await verifyCredential({
+    const result = await verifySdJwtVc({
       credential,
       anchors,
       expectedVct: 'urn:eudi:pid:1',

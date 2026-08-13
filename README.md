@@ -101,9 +101,9 @@ npm run build     # tsc -> dist/, with declarations
 ```
 
 ```ts
-import { TrustAnchors, verifyAgeOver18 } from '@sauseschritt/eudi-rp-ts';
+import { TrustAnchors, verifyAgeOver18SdJwtVc } from '@sauseschritt/eudi-rp-ts';
 
-const result = await verifyAgeOver18({
+const result = await verifyAgeOver18SdJwtVc({
   credential,
   anchors: TrustAnchors.fromPem(issuerCaPem),
   expectedVct: 'urn:eudi:pid:1',
@@ -712,7 +712,7 @@ a verification is not one: it can fetch a status list, then a CRL or an OCSP
 round trip for each certificate in the chain, in sequence. Ten seconds each is
 not ten seconds, and under load the number that matters is the total.
 
-So `verifyCredential`, `verifyMdoc`, `verifyDeviceResponse` and
+So `verifySdJwtVc`, `verifyMdoc`, `verifyDeviceResponse` and
 `verifyPresentationResponse` all take a `signal`. `AbortSignal.timeout(ms)` is
 the deadline; anything else that aborts is cancellation — a client that hung up,
 a shutdown, work nobody is waiting for. It is combined with each request's own
@@ -764,7 +764,7 @@ The library is deliberately inert: it reads no configuration, opens no ports and
 logs nothing. Four things are worth passing in anything serving traffic.
 
 ```ts
-const result = await verifyCredential({
+const result = await verifySdJwtVc({
   credential, anchors, expectedVct: 'urn:eudi:pid:1', keyBinding,
 
   statusCache,                          // shared; see Revocation above
@@ -809,7 +809,7 @@ issuer signature has verified. It appears on `verification.accepted` instead.
 verification, and the outermost verifier owns it.** A credential can verify
 perfectly and still be rejected afterwards — by the age predicate, or by mdoc
 device authentication, neither of which the inner verifier knows about. So
-`verifyAgeOver18`, `verifyDeviceResponse` and `verifyPresentationResponse`
+`verifyAgeOver18SdJwtVc`, `verifyDeviceResponse` and `verifyPresentationResponse`
 withhold the verdict until it is one, letting every intermediate event through
 in the meantime. Without that the trail records an acceptance for a presentation
 the caller was told to reject, which is the single claim it exists to make.
@@ -852,7 +852,7 @@ All handled in `src/`; all easy to get wrong by assuming otherwise.
    identifier — so a presentation minted for a different verifier would pass. We
    check it explicitly. Relatedly, key binding is verified *only* when a nonce is
    supplied; passing none silently skips it even when a KB-JWT is present, which
-   is why `verifyCredential` throws rather than defaulting.
+   is why `verifySdJwtVc` throws rather than defaulting.
 3. **`xml-crypto` ships neither RSASSA-PSS nor ECDSA.** Several member states
    sign their trust lists with one or the other — Germany's is
    `sha256-rsa-MGF1`, Greece and Slovenia use `ecdsa-sha512`, Hungary

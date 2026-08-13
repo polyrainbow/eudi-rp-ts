@@ -12,7 +12,7 @@ import {
   verifyJws,
 } from './crypto.ts';
 import { type Outcome, accept, reject } from './result.ts';
-import { type AgeResult, evaluateAgeOver18 } from './predicate/age.ts';
+import { type AgeResult, evaluateAgeOver18SdJwt } from './predicate/age.ts';
 
 export type { AgeResult };
 import type { TrustAnchors } from './trust/anchors.ts';
@@ -38,7 +38,7 @@ export type KeyBindingExpectation = {
   audience: string;
 };
 
-export type VerifyCredentialOptions = {
+export type VerifySdJwtVcOptions = {
   /** Compact SD-JWT VC, optionally with a trailing Key Binding JWT. */
   credential: string;
   anchors: TrustAnchors;
@@ -122,8 +122,8 @@ export type VerifiedCredential = {
   keyBinding: { audience: string; nonce: string } | undefined;
 };
 
-export async function verifyCredential(
-  options: VerifyCredentialOptions,
+export async function verifySdJwtVc(
+  options: VerifySdJwtVcOptions,
 ): Promise<Outcome<VerifiedCredential>> {
   const now = options.now ?? new Date();
   const requireKeyBinding = options.requireKeyBinding ?? true;
@@ -392,7 +392,7 @@ export async function verifyCredential(
 /**
  * Verify the credential and evaluate the age-over-18 predicate in one step.
  *
- * The verdict is this function's rather than `verifyCredential`'s: a credential
+ * The verdict is this function's rather than `verifySdJwtVc`'s: a credential
  * can verify perfectly and still fail the predicate, and an audit trail
  * recording `verification.accepted` for a presentation the caller was told to
  * reject would be wrong about the only thing it exists to record.
@@ -402,8 +402,8 @@ export async function verifyCredential(
  * discloses nothing else, the birthdate discloses a date of birth, and a
  * relying party auditing what it actually learned needs to see which.
  */
-export async function verifyAgeOver18(
-  options: VerifyCredentialOptions,
+export async function verifyAgeOver18SdJwtVc(
+  options: VerifySdJwtVcOptions,
 ): Promise<Outcome<VerifiedCredential & AgeResult>> {
   const emit = options.onEvent ?? noopSink;
   const startedAt = Date.now();
@@ -419,10 +419,10 @@ export async function verifyAgeOver18(
     return outcome;
   };
 
-  const credential = await verifyCredential({ ...options, onEvent: withoutVerdict(emit) });
+  const credential = await verifySdJwtVc({ ...options, onEvent: withoutVerdict(emit) });
   if (!credential.verified) return rejectWith(credential);
 
-  const age = evaluateAgeOver18(credential.value.claims, options.now ?? new Date());
+  const age = evaluateAgeOver18SdJwt(credential.value.claims, options.now ?? new Date());
   if (!age.verified) return rejectWith(age);
 
   emit({

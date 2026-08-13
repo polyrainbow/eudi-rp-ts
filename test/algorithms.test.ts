@@ -19,7 +19,7 @@ import { requestSigningAlg } from '../src/oid4vp/callbacks.ts';
 import type { Outcome, ReasonCode, Rejected } from '../src/result.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { resolveIssuerCertificateChain } from '../src/trust/issuer-key.ts';
-import { verifyCredential } from '../src/verify.ts';
+import { verifySdJwtVc } from '../src/verify.ts';
 
 x509.cryptoProvider.set(webcrypto as never);
 
@@ -244,12 +244,12 @@ describe('an RSA-issued credential', () => {
       now: NOW,
     };
 
-    const accepted = await verifyCredential({ ...options, allowedAlgs: ['RS256'] });
+    const accepted = await verifySdJwtVc({ ...options, allowedAlgs: ['RS256'] });
     assert.equal(accepted.verified, true, JSON.stringify(accepted));
 
     // The default policy is still ES256: capability is the library's, policy is
     // the caller's, and widening one must not widen the other.
-    assertRejected(await verifyCredential(options), 'UNSUPPORTED_ALGORITHM');
+    assertRejected(await verifySdJwtVc(options), 'UNSUPPORTED_ALGORITHM');
   });
 
   it('reports a key that cannot perform the stated alg as unsupported, not as a bad signature', async () => {
@@ -264,7 +264,7 @@ describe('an RSA-issued credential', () => {
       ...rest,
     ].join('.');
 
-    const outcome = await verifyCredential({
+    const outcome = await verifySdJwtVc({
       credential: relabelled,
       anchors,
       expectedVct: 'urn:eudi:pid:1',

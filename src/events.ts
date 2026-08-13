@@ -72,9 +72,9 @@ export const noopSink: EventSink = () => {};
  * verification, and **the outermost verifier owns it**.
  *
  * The inner verifiers here are genuine entry points — `verifyMdoc` and
- * `verifyCredential` are exported and callers use them directly — but they are
+ * `verifySdJwtVc` are exported and callers use them directly — but they are
  * also steps inside larger ones: `verifyDeviceResponse` still has to
- * authenticate the device afterwards, and `verifyAgeOver18` still has to
+ * authenticate the device afterwards, and `verifyAgeOver18SdJwtVc` still has to
  * evaluate the predicate. Both can reject something the inner verifier just
  * accepted.
  *

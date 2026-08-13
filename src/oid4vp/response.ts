@@ -5,7 +5,7 @@ import type { VerifierIdentity } from './identity.ts';
 import { type Outcome, type Rejected, accept, reject } from '../result.ts';
 import { type CredentialFormat, type EventSink, noopSink, withoutVerdict } from '../events.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
-import { type AgeResult, type VerifiedCredential, verifyAgeOver18 } from '../verify.ts';
+import { type AgeResult, type VerifiedCredential, verifyAgeOver18SdJwtVc } from '../verify.ts';
 import { createDecryptJwe, createVerifyJwt, generateRandom, hashCallback } from './callbacks.ts';
 import { CREDENTIAL_QUERY_ID, MDOC_CREDENTIAL_QUERY_ID, PID_MDOC_NAMESPACE } from './query.ts';
 import { evaluateAgeOver18Mdoc } from '../predicate/age.ts';
@@ -145,7 +145,7 @@ export async function verifyPresentationResponse(
   }
   if (sdJwt.present) {
     return sdJwt.value
-      ? await verifySdJwt(context, sdJwt.value)
+      ? await verifySdJwtVcPresentation(context, sdJwt.value)
       : rejectWith(reject('RESPONSE_INVALID', sdJwt.problem));
   }
   if (mdoc.present) {
@@ -204,7 +204,7 @@ async function walletErrorResponse(
   );
 }
 
-async function verifySdJwt(
+async function verifySdJwtVcPresentation(
   context: PresentationContext,
   credential: string,
 ): Promise<Outcome<VerifiedPresentation>> {
@@ -217,7 +217,7 @@ async function verifySdJwt(
     return reject('RESPONSE_INVALID', 'Stored request payload has no client_id');
   }
 
-  const result = await verifyAgeOver18({
+  const result = await verifyAgeOver18SdJwtVc({
     credential,
     anchors: context.anchors,
     expectedVct: context.config.requestedVct,
@@ -229,7 +229,7 @@ async function verifySdJwt(
     // narrower set than was advertised would reject a wallet for answering
     // exactly what it was asked for.
     ...(context.config.allowedAlgs ? { allowedAlgs: context.config.allowedAlgs } : {}),
-    // `verifyAgeOver18` owns the verdict, predicate included, so the sink goes
+    // `verifyAgeOver18SdJwtVc` owns the verdict, predicate included, so the sink goes
     // straight through rather than being wrapped.
     ...(context.onEvent ? { onEvent: context.onEvent } : {}),
     ...(context.signal ? { signal: context.signal } : {}),
@@ -271,7 +271,7 @@ async function verifyMdocPresentation(
   const result = await verifyDeviceResponse({
     // The age predicate below can still reject what the device response
     // established, so the verdict is this function's — the mirror of what
-    // `verifyAgeOver18` does on the SD-JWT VC side.
+    // `verifyAgeOver18SdJwtVc` does on the SD-JWT VC side.
     onEvent: withoutVerdict(emit),
     deviceResponse,
     anchors: context.anchors,

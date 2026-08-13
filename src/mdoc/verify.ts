@@ -46,7 +46,7 @@ export type MdocVerifyOptions = {
    */
   tolerateMalformedValidityDates?: boolean;
   /**
-   * Check the MSO's status list. On by default, matching `verifyCredential`:
+   * Check the MSO's status list. On by default, matching `verifySdJwtVc`:
    * an mdoc carrying a status reference we do not check is one we might be
    * accepting after revocation. The EU reference issuer populates it — see
    * `test/fixtures/real/`. Requires network access to the issuer's status
@@ -84,7 +84,7 @@ export type MdocVerifyOptions = {
   onEvent?: EventSink;
   /**
    * Cancellation, and the only bound on the whole verification — the same
-   * option `verifyCredential` takes, for the same reason: `timeoutMs` bounds
+   * option `verifySdJwtVc` takes, for the same reason: `timeoutMs` bounds
    * one request and this call can make several. Reported as
    * `VERIFICATION_ABORTED`.
    */
@@ -120,7 +120,7 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
     return outcome;
   };
 
-  // Before any of it, for the reason `verifyCredential` gives: the caller has
+  // Before any of it, for the reason `verifySdJwtVc` gives: the caller has
   // already said it does not want the answer.
   if (options.signal?.aborted) {
     return rejectWith(reject('VERIFICATION_ABORTED', 'Cancelled before verification began'));

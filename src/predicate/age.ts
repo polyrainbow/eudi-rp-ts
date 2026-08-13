@@ -27,7 +27,7 @@ export type AgeResult = {
  * `urn:eudi:pid:1` credentials issued against newer rulebooks. That is why the
  * birthdate fallback exists. See README "Open questions".
  */
-export function evaluateAgeOver18(claims: Record<string, unknown>, now: Date): Outcome<AgeResult> {
+export function evaluateAgeOver18SdJwt(claims: Record<string, unknown>, now: Date): Outcome<AgeResult> {
   const bucket = claims['age_equal_or_over'];
   if (bucket !== undefined && bucket !== null) {
     if (typeof bucket !== 'object' || Array.isArray(bucket)) {
@@ -83,7 +83,7 @@ export function evaluateAgeOver18Mdoc(
   const birthDate = elements['birth_date'];
   if (typeof birthDate === 'string') {
     // mdoc full-dates may arrive as a tagged date already rendered to ISO.
-    return evaluateAgeOver18({ birthdate: birthDate.slice(0, 10) }, now);
+    return evaluateAgeOver18SdJwt({ birthdate: birthDate.slice(0, 10) }, now);
   }
 
   return reject(
