@@ -33,6 +33,18 @@ export type VerificationEvent =
    */
   | { type: 'verification.started'; format: CredentialFormat; credentialType: string | undefined }
   | { type: 'issuer.resolved'; format: CredentialFormat; subject: string; chainLength: number }
+  /**
+   * `cached` is true when this verification did **not** reach the issuer — the
+   * answer came from a cache entry, or from a fetch already in flight for the
+   * same list. False means it was fetched here and now.
+   *
+   * The distinction is the point: a cached `valid` can be up to the cache's TTL
+   * old, so an auditor reading a revocation claim needs to know which they
+   * have. It used to report `statusCache !== undefined`, which said only that a
+   * cache was configured — constant for a deployment, and therefore no
+   * information at all. A live run made that visible: `cached: true` on the
+   * first lookup after a fresh deploy (REPRODUCE.md §7).
+   */
   | { type: 'status.checked'; outcome: 'valid' | 'revoked' | 'unavailable'; cached: boolean }
   /**
    * Revocation of the issuer's certificate chain, which is a different question

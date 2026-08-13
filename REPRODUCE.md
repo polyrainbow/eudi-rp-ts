@@ -1121,16 +1121,28 @@ therefore carries one. It does not. Proving "18 or over" against a current
 reference PID costs the holder a full date of birth in **both** formats, and
 choosing the mdoc credential does not avoid it.
 
-### A defect this run exposed
+### A defect this run exposed, since fixed
 
 `status.checked` reported `cached: true` on a fetch that was demonstrably cold —
-it was the first status lookup after a fresh deploy. The field is
-`options.statusCache !== undefined`: it says *a cache was configured*, not *this
+it was the first status lookup after a fresh deploy. The field was
+`options.statusCache !== undefined`: it said *a cache was configured*, not *this
 answer came from cache*. Next to a revocation claim that reads as "the status
-was not re-checked", which was false here.
+was not re-checked", which was false here. Being constant for a given
+deployment, it carried no information at all.
 
 Nothing in the offline suite could catch it — those tests pass a cache or none
-and never ask the event which of the two happened.
+and never asked the event which of the two had happened. Two now do.
+
+It now reports whether this verification reached the issuer, taken from whether
+the cache actually ran its loader: `false` means fetched here and now, `true`
+means served from a stored entry or from a fetch already in flight for the same
+list. A cached `valid` can be up to the cache TTL old, which is exactly what an
+auditor reading a revocation claim needs to be able to tell.
+
+**The log lines above are left as they were recorded**, `cached: true` and all.
+They are what that deployment emitted on 2026-08-13; rewriting them to match the
+current code would make this section a description of the fix rather than a
+record of the run.
 
 ## Observed facts about the reference infrastructure
 

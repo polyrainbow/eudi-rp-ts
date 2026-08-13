@@ -170,13 +170,14 @@ describe('status list', () => {
       const check = (index: number) =>
         checkStatusList({ uri, index }, { anchors, now: NOW, fetchImpl: serving(token) });
 
-      assert.deepEqual(await check(3), { kind: 'revoked', status: 1 }, `bits ${bits}, index 3`);
+      // `cached: false` throughout: no cache is supplied, so nothing can be a hit.
+      assert.deepEqual(await check(3), { kind: 'revoked', status: 1, cached: false }, `bits ${bits}, index 3`);
       assert.deepEqual(
         await check(7),
-        { kind: 'revoked', status: 2 ** width - 1 },
+        { kind: 'revoked', status: 2 ** width - 1, cached: false },
         `bits ${bits}, index 7 must read the widest value the size allows`,
       );
-      assert.deepEqual(await check(5), { kind: 'valid' }, `bits ${bits}, index 5`);
+      assert.deepEqual(await check(5), { kind: 'valid', cached: false }, `bits ${bits}, index 5`);
     }
   });
 

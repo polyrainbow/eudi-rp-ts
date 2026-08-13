@@ -264,7 +264,7 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
       emit({
         type: 'status.checked',
         outcome: outcome.kind === 'valid' ? 'valid' : outcome.kind === 'revoked' ? 'revoked' : 'unavailable',
-        cached: options.statusCache !== undefined,
+        cached: outcome.cached,
       });
       if (outcome.kind === 'revoked') {
         return rejectWith(

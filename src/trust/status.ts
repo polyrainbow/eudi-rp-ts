@@ -106,9 +106,9 @@ export function createStatusListCache(ttlMs = 5 * 60_000, errorTtlMs = 30_000): 
  */
 export type StatusOutcome =
   | { kind: 'not-checked' }
-  | { kind: 'valid' }
-  | { kind: 'revoked'; status: number }
-  | { kind: 'unavailable'; detail: string }
+  | { kind: 'valid'; cached: boolean }
+  | { kind: 'revoked'; status: number; cached: boolean }
+  | { kind: 'unavailable'; detail: string; cached: boolean }
   /**
    * The caller's signal fired. Recorded separately from `unavailable` for the
    * reason the whole type exists: "we gave up" and "the issuer did not answer"
@@ -152,14 +152,42 @@ async function loadStatusListToken(uri: string, options: StatusCheckOptions): Pr
  * The abort is identified from the signal's state, never from the error, so a
  * `fetch` that phrases cancellation differently changes nothing here.
  */
-async function loadThroughCache(uri: string, options: StatusCheckOptions): Promise<string> {
-  if (!options.cache) return loadStatusListToken(uri, options);
+async function loadThroughCache(
+  uri: string,
+  options: StatusCheckOptions,
+): Promise<{ token: string; cached: boolean }> {
+  if (!options.cache) return { token: await loadStatusListToken(uri, options), cached: false };
+
+  // `TtlCache` runs the loader only on a miss, so whether it ran *is* the
+  // answer — no cache API has to report it, and the two cannot drift apart.
+  let loaded = false;
   try {
-    return await options.cache.get(uri, () => loadStatusListToken(uri, options));
+    const token = await options.cache.get(uri, () => {
+      loaded = true;
+      return loadStatusListToken(uri, options);
+    });
+    return { token, cached: !loaded };
   } catch (error) {
     if (options.signal?.aborted) options.cache.delete(uri);
-    throw error;
+    // A remembered failure is a cache hit too, and worth reporting as one: it
+    // means this verification never reached the issuer at all.
+    throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+      [SERVED_FROM_CACHE]: !loaded,
+    });
   }
+}
+
+/**
+ * Marks a rejected load as having come from the cache rather than the network.
+ *
+ * A symbol on the error rather than a second return value, because this path
+ * throws — `@sd-jwt` demands a fetcher that rejects — and the alternative is
+ * threading an out-parameter through two call sites for one boolean.
+ */
+const SERVED_FROM_CACHE = Symbol('servedFromCache');
+
+function fromCache(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as Record<symbol, boolean>)[SERVED_FROM_CACHE] === true;
 }
 
 /**
@@ -297,26 +325,34 @@ function readStatusAt(
 export async function checkStatusList(
   reference: StatusListReference,
   options: StatusCheckOptions,
-): Promise<StatusOutcome> {
+  // Never `not-checked`: reaching this function *is* the check. Narrowing the
+  // return says so to the caller instead of making it handle a case that
+  // cannot happen.
+): Promise<Exclude<StatusOutcome, { kind: 'not-checked' }>> {
   if (options.signal?.aborted) return { kind: 'aborted' };
 
   let token: string;
+  let cached: boolean;
   try {
-    token = await loadThroughCache(reference.uri, options);
+    ({ token, cached } = await loadThroughCache(reference.uri, options));
   } catch (error) {
     if (options.signal?.aborted) return { kind: 'aborted' };
-    return { kind: 'unavailable', detail: error instanceof Error ? error.message : String(error) };
+    return {
+      kind: 'unavailable',
+      detail: error instanceof Error ? error.message : String(error),
+      cached: fromCache(error),
+    };
   }
 
   const problem = inspectStatusListToken(token, reference.uri, options);
-  if (problem) return { kind: 'unavailable', detail: problem };
+  if (problem) return { kind: 'unavailable', detail: problem, cached };
 
   const signer = resolveStatusListSigner(token, options);
-  if (!signer.ok) return { kind: 'unavailable', detail: signer.detail };
+  if (!signer.ok) return { kind: 'unavailable', detail: signer.detail, cached };
 
   const [header, payload, signature] = token.split('.');
   if (!header || !payload || !signature) {
-    return { kind: 'unavailable', detail: 'Status list is not a compact JWS' };
+    return { kind: 'unavailable', detail: 'Status list is not a compact JWS', cached };
   }
   const verification = verifyStatusListSignature(
     token,
@@ -325,12 +361,14 @@ export async function checkStatusList(
     signer.publicKey,
     options,
   );
-  if (verification !== true) return { kind: 'unavailable', detail: verification };
+  if (verification !== true) return { kind: 'unavailable', detail: verification, cached };
 
   const status = readStatusAt(token, reference.index);
-  if (!status.ok) return { kind: 'unavailable', detail: status.detail };
+  if (!status.ok) return { kind: 'unavailable', detail: status.detail, cached };
 
-  return status.status === 0 ? { kind: 'valid' } : { kind: 'revoked', status: status.status };
+  return status.status === 0
+    ? { kind: 'valid', cached }
+    : { kind: 'revoked', status: status.status, cached };
 }
 
 /**
@@ -371,6 +409,12 @@ export function createStatusChecker(options: StatusCheckOptions): StatusChecker 
   // The verifier callback gets only (data, signature) — no header, no token. So
   // the fetched list is kept here for the verifier to resolve a key from.
   let fetched: string | undefined;
+  /**
+   * Whether the token came from the cache rather than the issuer. Recorded by
+   * the fetcher and read by every outcome below it, because `@sd-jwt` calls
+   * those separately and none of them is where the lookup happened.
+   */
+  let servedFromCache = false;
 
   let outcome: StatusOutcome = { kind: 'not-checked' };
 
@@ -382,14 +426,18 @@ export function createStatusChecker(options: StatusCheckOptions): StatusChecker 
     async statusListFetcher(uri: string): Promise<string> {
       let token: string;
       try {
-        token = await loadThroughCache(uri, options);
+        ({ token, cached: servedFromCache } = await loadThroughCache(uri, options));
       } catch (error) {
         // `@sd-jwt` reports failure by throwing, so the outcome has to be
         // recorded before rethrowing — this is the only place that still knows
         // whether the signal fired.
         outcome = options.signal?.aborted
           ? { kind: 'aborted' }
-          : { kind: 'unavailable', detail: error instanceof Error ? error.message : String(error) };
+          : {
+              kind: 'unavailable',
+              detail: error instanceof Error ? error.message : String(error),
+              cached: fromCache(error),
+            };
         throw error;
       }
 
@@ -397,7 +445,7 @@ export function createStatusChecker(options: StatusCheckOptions): StatusChecker 
       // expire before its entry does.
       const problem = inspectStatusListToken(token, uri, options);
       if (problem) {
-        outcome = { kind: 'unavailable', detail: problem };
+        outcome = { kind: 'unavailable', detail: problem, cached: servedFromCache };
         throw new Error(problem);
       }
 
@@ -407,10 +455,10 @@ export function createStatusChecker(options: StatusCheckOptions): StatusChecker 
 
     async statusValidator(status: number): Promise<void> {
       if (status !== 0) {
-        outcome = { kind: 'revoked', status };
+        outcome = { kind: 'revoked', status, cached: servedFromCache };
         throw new Error(`Credential status is ${status}`);
       }
-      outcome = { kind: 'valid' };
+      outcome = { kind: 'valid', cached: servedFromCache };
     },
 
     statusVerifier(data: string, signature: string): boolean {
@@ -418,13 +466,13 @@ export function createStatusChecker(options: StatusCheckOptions): StatusChecker 
 
       const signer = resolveStatusListSigner(fetched, options);
       if (!signer.ok) {
-        outcome = { kind: 'unavailable', detail: signer.detail };
+        outcome = { kind: 'unavailable', detail: signer.detail, cached: servedFromCache };
         return false;
       }
 
       const verification = verifyStatusListSignature(fetched, data, signature, signer.publicKey, options);
       if (verification !== true) {
-        outcome = { kind: 'unavailable', detail: verification };
+        outcome = { kind: 'unavailable', detail: verification, cached: servedFromCache };
         return false;
       }
       return true;

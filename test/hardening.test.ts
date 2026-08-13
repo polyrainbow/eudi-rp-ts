@@ -194,6 +194,59 @@ describe('verification events', () => {
     assert.equal((rejected as { reason: string }).reason, 'UNEXPECTED_CREDENTIAL_TYPE');
   });
 
+  it('reports whether the status answer came from cache, not whether one exists', async () => {
+    // The bug this replaces: `cached` was `statusCache !== undefined`, so it
+    // said "cached" for a cold fetch and was constant for a given deployment —
+    // no information at all. A live run against the reference issuer reported
+    // `cached: true` on the first lookup after a deploy (REPRODUCE.md §7).
+    const { createStatusListCache } = await import('../src/trust/status.ts');
+    const cache = createStatusListCache();
+    const serving: typeof fetch = (async () =>
+      new Response(fixtures.statusLists.valid as string, {
+        status: 200,
+        headers: { 'content-type': 'application/statuslist+jwt' },
+      })) as typeof fetch;
+
+    const withStatus = {
+      ...base,
+      credential: fixtures.credentials.withStatus as string,
+      checkStatus: true,
+      statusFetch: serving,
+      statusCache: cache,
+    };
+
+    const first: VerificationEvent[] = [];
+    await verifySdJwtVc({ ...withStatus, onEvent: (e) => first.push(e) });
+    const second: VerificationEvent[] = [];
+    await verifySdJwtVc({ ...withStatus, onEvent: (e) => second.push(e) });
+
+    const cachedFlag = (events: VerificationEvent[]) =>
+      (events.find((e) => e.type === 'status.checked') as { cached: boolean } | undefined)?.cached;
+
+    assert.equal(cachedFlag(first), false, 'the first lookup fetched, so it was not cached');
+    assert.equal(cachedFlag(second), true, 'the second was served from the cache');
+  });
+
+  it('reports no cache hit when no cache is configured at all', async () => {
+    const serving: typeof fetch = (async () =>
+      new Response(fixtures.statusLists.valid as string, {
+        status: 200,
+        headers: { 'content-type': 'application/statuslist+jwt' },
+      })) as typeof fetch;
+
+    const events: VerificationEvent[] = [];
+    await verifySdJwtVc({
+      ...base,
+      credential: fixtures.credentials.withStatus as string,
+      checkStatus: true,
+      statusFetch: serving,
+      onEvent: (e) => events.push(e),
+    });
+
+    const checked = events.find((e) => e.type === 'status.checked') as { cached: boolean };
+    assert.equal(checked.cached, false);
+  });
+
   it('carries no personal data', async () => {
     // An audit trail that accumulates dates of birth is worse than none.
     const events: VerificationEvent[] = [];

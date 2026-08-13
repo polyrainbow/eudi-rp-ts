@@ -359,7 +359,10 @@ export async function verifySdJwtVc(
     emit({
       type: 'status.checked',
       outcome: status.outcome.kind === 'revoked' ? 'revoked' : status.outcome.kind,
-      cached: options.statusCache !== undefined,
+      // What the lookup actually did, not whether a cache happens to be
+      // configured — which is what this used to report, making it constant for
+      // a given deployment and therefore no information at all.
+      cached: status.outcome.cached,
     });
   }
   if (status.outcome.kind === 'aborted') {
