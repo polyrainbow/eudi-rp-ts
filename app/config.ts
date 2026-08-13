@@ -2,6 +2,9 @@ import { readFileSync } from 'node:fs';
 import { DEFAULT_ALLOWED_ALGS, type JwsAlg, isSupportedAlg } from '../src/crypto.ts';
 import { type ClientIdPrefix, type VerifierIdentity, verifierBaseUrl } from '../src/oid4vp/identity.ts';
 import type { TrustListOptions } from '../src/trust/lotl.ts';
+import type { DcqlQuery } from '../src/oid4vp/query.ts';
+import { ageOver18Query } from '../src/presets/age-over-18.ts';
+import { PID_VCT } from '../src/presets/eudi-pid.ts';
 
 /**
  * Configuration for the demo application.
@@ -13,6 +16,18 @@ import type { TrustListOptions } from '../src/trust/lotl.ts';
  */
 export type Config = VerifierIdentity & {
   port: number;
+  /**
+   * The question this deployment asks, as DCQL.
+   *
+   * Configuration, not a library constant: `buildAuthorizationRequest` takes a
+   * query and `verifyPresentationResponse` checks the answer against the one
+   * that was sent, so the demo picking age-over-18 here is the demo's choice.
+   * Asking something else is this value plus a matching predicate in
+   * `server.ts`, and nothing in `src/`.
+   */
+  query: DcqlQuery;
+  /** The SD-JWT VC type the query asks for. Kept for the audit trail and the startup banner. */
+  requestedVct: string;
   trust: TrustConfig;
   /**
    * Accept an mdoc whose `validUntil` is not valid RFC 3339. The EU reference
@@ -95,8 +110,13 @@ export function loadConfig(): Config {
       return alg;
     });
 
+  const requestedVct = env('REQUESTED_VCT') ?? PID_VCT;
+
   const config: Config = {
     port,
+    requestedVct,
+    query: ageOver18Query({ vct: requestedVct }),
+    clientName: env('CLIENT_NAME') ?? 'eudi-rp-ts age check',
     baseUrl,
     // `eudi-openid4vp://` is what the live EUDI reference infrastructure emits.
     walletScheme: env('WALLET_SCHEME') ?? 'eudi-openid4vp://',
@@ -104,7 +124,6 @@ export function loadConfig(): Config {
     clientDnsName: env('CLIENT_DNS_NAME'),
     accessCertificateChainPem: envPem('ACCESS_CERT_CHAIN'),
     accessCertificatePrivateKeyPem: envPem('ACCESS_CERT_KEY'),
-    requestedVct: env('REQUESTED_VCT') ?? 'urn:eudi:pid:1',
     requestTtlSeconds: Number(env('REQUEST_TTL_SECONDS') ?? 300),
     // Accepting a credential whose revocation status you did not check is
     // accepting a revoked one. Off only for an offline demo.

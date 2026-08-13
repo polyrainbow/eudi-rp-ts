@@ -5,7 +5,7 @@ import { type VerifierIdentity, clientId, responseUri, verifierBaseUrl } from '.
 import { DEFAULT_ALLOWED_ALGS } from '../crypto.ts';
 import { coseAlgIdentifiers } from '../mdoc/cose.ts';
 import { createEncryptJwe, createSignJwt, generateRandom, hashCallback, requestSigningAlg } from './callbacks.ts';
-import { ageOver18Query } from './query.ts';
+import { type DcqlQuery, queryFormats } from './query.ts';
 
 const b64url = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
 
@@ -27,7 +27,14 @@ export type BuiltRequest = {
 };
 
 /**
- * Build an OID4VP 1.0 authorization request for the age-over-18 predicate.
+ * Build an OID4VP 1.0 authorization request for a DCQL query.
+ *
+ * The query is an argument rather than something this function builds, and that
+ * is the whole of what makes this library general: it used to call
+ * `ageOver18Query` itself, so one question was wired into the request builder
+ * and, through the credential query ids, into the response verifier as well.
+ * `verifyPresentationResponse` reads the query back off the payload returned
+ * here, so whatever is asked is what the answer gets checked against.
  *
  * Two shapes, selected by config:
  *
@@ -45,7 +52,10 @@ export type BuiltRequest = {
  * identifies itself, and it is the option to reach for when the certificate you
  * are issued carries a URI SAN, or none, instead of a dNSName.
  */
-export async function buildAuthorizationRequest(config: VerifierIdentity): Promise<BuiltRequest> {
+export async function buildAuthorizationRequest(
+  config: VerifierIdentity,
+  query: DcqlQuery,
+): Promise<BuiltRequest> {
   const nonce = b64url(generateRandom(32));
   const state = b64url(generateRandom(32));
   // The response URI identifies the session. With `direct_post.jwt` the `state`
@@ -82,28 +92,34 @@ export async function buildAuthorizationRequest(config: VerifierIdentity): Promi
     response_mode: encryptResponse ? 'direct_post.jwt' : 'direct_post',
     nonce,
     state,
-    dcql_query: ageOver18Query(config.requestedVct),
+    dcql_query: query,
     client_metadata: {
-      client_name: 'eudi-rp-ts age check',
-      // Every format the DCQL query asks for MUST appear here. A wallet checks
-      // the two against each other and refuses the whole request otherwise —
-      // the EU reference wallet answers `invalid_request` with
-      // "Verifier does not support all Formats requested in the DCQL query".
-      // Declaring only `dc+sd-jwt` while the query also offers `mso_mdoc` was
-      // exactly that bug, so a test now pins the two together.
-      // Advertised from the policy that will actually be enforced, so a wallet
-      // is not told ES256 by a verifier configured to accept more, nor offered
-      // an algorithm the verification would then refuse.
-      vp_formats_supported: {
-        'dc+sd-jwt': { 'sd-jwt_alg_values': [...allowedAlgs], 'kb-jwt_alg_values': [...allowedAlgs] },
-        // COSE algorithm identifiers here, not JOSE names: -7 is ES256
-        // (RFC 9053 §2.1). Only the ECDSA subset appears, because that is all
-        // ISO 18013-5 permits for issuer and device authentication.
-        mso_mdoc: {
-          issuerauth_alg_values: [...coseAlgIdentifiers(allowedAlgs)],
-          deviceauth_alg_values: [...coseAlgIdentifiers(allowedAlgs)],
-        },
-      },
+      client_name: config.clientName ?? 'eudi-rp-ts verifier',
+      // Every format the DCQL query asks for MUST appear here, and only those:
+      // a wallet checks the two against each other and refuses the whole
+      // request otherwise — the EU reference wallet answers `invalid_request`
+      // with "Verifier does not support all Formats requested in the DCQL
+      // query". Declaring only `dc+sd-jwt` while the query also offered
+      // `mso_mdoc` was exactly that bug, which is why this is derived from the
+      // query rather than written out beside it.
+      //
+      // The algorithms are the policy that will actually be enforced, so a
+      // wallet is not told ES256 by a verifier configured to accept more, nor
+      // offered an algorithm the verification would then refuse.
+      vp_formats_supported: Object.fromEntries(
+        queryFormats(query).map((format) => [
+          format,
+          format === 'dc+sd-jwt'
+            ? { 'sd-jwt_alg_values': [...allowedAlgs], 'kb-jwt_alg_values': [...allowedAlgs] }
+            : // COSE algorithm identifiers here, not JOSE names: -7 is ES256
+              // (RFC 9053 §2.1). Only the ECDSA subset appears, because that is
+              // all ISO 18013-5 permits for issuer and device authentication.
+              {
+                issuerauth_alg_values: [...coseAlgIdentifiers(allowedAlgs)],
+                deviceauth_alg_values: [...coseAlgIdentifiers(allowedAlgs)],
+              },
+        ]),
+      ),
       // Encryption is described by the JWK alone. `authorization_encrypted_
       // response_alg`/`_enc` are pre-1.0 JARM names and appear nowhere in
       // OID4VP 1.0; the content encryption algorithm comes from

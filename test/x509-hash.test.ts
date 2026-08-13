@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { clientId, responseUri, verifierBaseUrl, x509Hash } from '../src/oid4vp/identity.ts';
 import { buildAuthorizationRequest } from '../src/oid4vp/request.ts';
+import { ageOver18Query } from '../src/presets/age-over-18.ts';
 import { createAccessCertificate } from '../scripts/make-access-cert.ts';
 
 /**
@@ -21,7 +22,6 @@ const identity = {
   clientDnsName: undefined,
   accessCertificateChainPem: cert.chainPem,
   accessCertificatePrivateKeyPem: cert.keyPem,
-  requestedVct: 'urn:eudi:pid:1',
   requestTtlSeconds: 300,
   checkStatus: false,
   checkCertificateRevocation: false,
@@ -75,7 +75,7 @@ describe('x509_hash client identifier', () => {
   });
 
   it('signs the request, and the wallet can recompute the identifier from x5c', async () => {
-    const request = await buildAuthorizationRequest(identity);
+    const request = await buildAuthorizationRequest(identity, ageOver18Query());
 
     // Passed by reference, because a JAR carrying x5c exceeds QR capacity.
     const params = new URL(
@@ -102,7 +102,7 @@ describe('verifier base URL', () => {
     const insecure = { ...identity, baseUrl: 'http://verifier.test' };
 
     assert.throws(() => responseUri(insecure, 'session'), /must be https/);
-    await assert.rejects(() => buildAuthorizationRequest(insecure), /must be https/);
+    await assert.rejects(() => buildAuthorizationRequest(insecure, ageOver18Query()), /must be https/);
   });
 
   it('refuses a base that is not a URL at all', () => {

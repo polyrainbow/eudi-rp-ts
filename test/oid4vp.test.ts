@@ -7,7 +7,7 @@ import type { Server } from 'node:http';
 import type { Config } from '../app/config.ts';
 import { createVerifierServer } from '../app/http/server.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
-import { CREDENTIAL_QUERY_ID } from '../src/oid4vp/query.ts';
+import { AGE_OVER_18_SD_JWT_QUERY_ID, ageOver18Query } from '../src/presets/age-over-18.ts';
 import { presentAgeOver18 } from './wallet.ts';
 
 const dir = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -31,6 +31,7 @@ before(async () => {
     accessCertificateChainPem: undefined,
     accessCertificatePrivateKeyPem: undefined,
     requestedVct: 'urn:eudi:pid:1',
+    query: ageOver18Query({ vct: 'urn:eudi:pid:1' }),
     requestTtlSeconds: 300,
     checkStatus: false,
     checkCertificateRevocation: false,
@@ -94,7 +95,7 @@ describe('OID4VP round trip', () => {
 
     // The DCQL query must ask for the single claim and nothing more.
     const query = JSON.parse(params.get('dcql_query')!);
-    assert.equal(query.credentials[0].id, CREDENTIAL_QUERY_ID);
+    assert.equal(query.credentials[0].id, AGE_OVER_18_SD_JWT_QUERY_ID);
     assert.equal(query.credentials[0].format, 'dc+sd-jwt');
     assert.deepEqual(query.credentials[0].meta.vct_values, ['urn:eudi:pid:1']);
     // Two acceptable answers, ranked. Asking only for age_equal_or_over.18
@@ -117,14 +118,20 @@ describe('OID4VP round trip', () => {
       audience: params.get('client_id')!,
     });
 
-    const posted = await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, params);
+    const posted = await postToWallet({ [AGE_OVER_18_SD_JWT_QUERY_ID]: [presentation] }, params);
     assert.equal(posted.status, 200);
 
     const { status, result } = await outcome(session.id);
     assert.equal(status, 'verified', JSON.stringify(result));
     assert.equal(result?.['verified'], true);
     assert.equal(result?.['evidence'], 'age_equal_or_over.18');
-    assert.equal(result?.['credentialType'], 'urn:eudi:pid:1');
+    assert.deepEqual(result?.['credentials'], [
+      {
+        format: 'dc+sd-jwt',
+        credentialType: 'urn:eudi:pid:1',
+        issuer: (result?.['credentials'] as { issuer: string }[])[0]!.issuer,
+      },
+    ]);
   });
 
   it('rejects a presentation bound to a nonce from a different session', async () => {
@@ -139,7 +146,7 @@ describe('OID4VP round trip', () => {
       audience: `redirect_uri:${requestParams(victim.walletUri).get('response_uri')}`,
     });
 
-    await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, requestParams(victim.walletUri));
+    await postToWallet({ [AGE_OVER_18_SD_JWT_QUERY_ID]: [presentation] }, requestParams(victim.walletUri));
 
     const { status, result } = await outcome(victim.id);
     assert.equal(status, 'rejected');
@@ -157,7 +164,7 @@ describe('OID4VP round trip', () => {
       audience: 'redirect_uri:https://attacker.example/oid4vp/response',
     });
 
-    await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, params);
+    await postToWallet({ [AGE_OVER_18_SD_JWT_QUERY_ID]: [presentation] }, params);
 
     const { result } = await outcome(session.id);
     assert.equal(result?.['reason'], 'KEY_BINDING_AUDIENCE_MISMATCH');
@@ -183,11 +190,11 @@ describe('OID4VP round trip', () => {
       audience: params.get('client_id')!,
     });
 
-    const first = await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, params);
+    const first = await postToWallet({ [AGE_OVER_18_SD_JWT_QUERY_ID]: [presentation] }, params);
     assert.equal(first.status, 200);
 
     // A nonce is single use. Replaying the same response must not be processed.
-    const replay = await postToWallet({ [CREDENTIAL_QUERY_ID]: [presentation] }, params);
+    const replay = await postToWallet({ [AGE_OVER_18_SD_JWT_QUERY_ID]: [presentation] }, params);
     assert.equal(replay.status, 400);
     assert.equal((await replay.json()).reason, 'SESSION_UNKNOWN');
   });

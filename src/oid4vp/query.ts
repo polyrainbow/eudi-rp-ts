@@ -1,5 +1,5 @@
 /**
- * DCQL: the query a verifier sends, and the age-over-18 query built with it.
+ * DCQL: the query a verifier sends, and the code that reads it back.
  *
  * DCQL (Digital Credentials Query Language) is OID4VP 1.0's replacement for
  * Presentation Exchange. Shape per OID4VP 1.0 §6:
@@ -13,6 +13,14 @@
  * `vp_formats_supported` the request has to advertise — and every one of those
  * facts is already stated in the query. A verifier that keeps its own second
  * copy has two things to keep in step instead of one.
+ *
+ * That is why this module holds no query of its own. It used to export
+ * `ageOver18Query` alongside the constants naming its two credential query ids,
+ * and `oid4vp/response.ts` dispatched on those constants — which made one
+ * question, asked one way, a property of the library rather than of the caller.
+ * A query is now an argument to `buildAuthorizationRequest` and the answer is
+ * checked against the query that was actually sent. `presets/age-over-18.ts` is
+ * one builder of one query; the readers below are what any of them share.
  *
  * `path` walks into the claim structure, so the EUDI PID Rulebook's
  * `age_equal_or_over.18` is `["age_equal_or_over", "18"]`.
@@ -102,63 +110,97 @@ export type DcqlQuery = {
   credential_sets?: readonly CredentialSetQuery[];
 };
 
-export const CREDENTIAL_QUERY_ID = 'age_over_18';
-/** The mdoc alternative. */
-export const MDOC_CREDENTIAL_QUERY_ID = 'age_over_18_mdoc';
-/** mdoc groups elements into namespaces; the PID's is its doc type. */
-export const PID_MDOC_NAMESPACE = 'eu.europa.ec.eudi.pid.1';
-
-/** Claim ids, referenced from `claim_sets`. */
-const AGE_FLAG = 'age_equal_or_over_18';
-const BIRTHDATE = 'birthdate';
+/** The Credential Query a `vp_token` key refers to, or undefined if we asked no such thing. */
+export function credentialQueryById(query: DcqlQuery, id: string): CredentialQuery | undefined {
+  return query.credentials.find((candidate) => candidate.id === id);
+}
 
 /**
- * Two ways to satisfy the request, in order of preference.
+ * Every format the query asks for.
  *
- * Asking only for `age_equal_or_over.18` matches nothing from the EU reference
- * issuer, which emits no age attribute at all — PID Rulebook v1.1 removed them
- * per CIR 2024/2977. OID4VP 1.0 §6.4.1: with `claims` present and `claim_sets`
- * absent the Verifier requests *all* listed claims, so a single-path query is
- * unsatisfiable against a real PID and the wallet returns nothing.
- *
- * `claim_sets` expresses preference instead — "the Wallet SHOULD return the
- * first option that it can satisfy". So we ask for the privacy-preserving
- * boolean first and accept a full date of birth only from a wallet that cannot
- * provide it. That ordering is the whole point: `birthdate` discloses far more
- * than the question we asked, and should never be the first choice.
+ * `client_metadata.vp_formats_supported` MUST list all of them: a wallet checks
+ * the two against each other and refuses the whole request otherwise. Derived
+ * from the query rather than stated beside it, because "stated beside it" is
+ * how the two came apart once already — see `request.ts`.
  */
-export function ageOver18Query(vct: string, mdocDocType: string = PID_MDOC_NAMESPACE): DcqlQuery {
-  return {
-    credentials: [
-      {
-        id: CREDENTIAL_QUERY_ID,
-        format: 'dc+sd-jwt',
-        meta: { vct_values: [vct] },
-        // Requires the wallet to return an SD-JWT+KB, so the presentation is
-        // bound to the holder's key and to our nonce (OID4VP 1.0 Appendix B.3).
-        require_cryptographic_holder_binding: true,
-        claims: [
-          { id: AGE_FLAG, path: ['age_equal_or_over', '18'] },
-          { id: BIRTHDATE, path: ['birthdate'] },
-        ],
-        claim_sets: [[AGE_FLAG], [BIRTHDATE]],
-      },
-      {
-        // mdoc spells the same information differently: a flat boolean, and
-        // `birth_date` rather than `birthdate`, inside a namespace.
-        id: MDOC_CREDENTIAL_QUERY_ID,
-        format: 'mso_mdoc',
-        meta: { doctype_value: mdocDocType },
-        claims: [
-          { id: AGE_FLAG, path: [mdocDocType, 'age_over_18'] },
-          { id: BIRTHDATE, path: [mdocDocType, 'birth_date'] },
-        ],
-        claim_sets: [[AGE_FLAG], [BIRTHDATE]],
-      },
-    ],
-    // Either credential answers the question. Without this the wallet would be
-    // asked for *both* (OID4VP 1.0 §6.4.2), which no holder has, and it would
-    // return nothing at all.
-    credential_sets: [{ options: [[CREDENTIAL_QUERY_ID], [MDOC_CREDENTIAL_QUERY_ID]] }],
-  };
+export function queryFormats(query: DcqlQuery): readonly CredentialQuery['format'][] {
+  return [...new Set(query.credentials.map((credential) => credential.format))];
+}
+
+/**
+ * The mdoc namespaces a query reads elements from, in the order first asked for.
+ *
+ * OID4VP 1.0 §7.2: an mdoc claims path is always two steps, `[namespace,
+ * element identifier]`. So the query already says which namespaces its answer
+ * will arrive in, and nothing needs to assume the EUDI PID's — whose namespace
+ * happens to equal its doc type, which an mDL's does not.
+ *
+ * Empty when the query names no claims, which asks for the whole credential.
+ */
+export function mdocNamespaces(query: MdocCredentialQuery): readonly string[] {
+  const namespaces = (query.claims ?? [])
+    .map((claim) => claim.path[0])
+    .filter((first): first is string => typeof first === 'string');
+  return [...new Set(namespaces)];
+}
+
+/**
+ * Whether the credentials a wallet actually returned answer the question.
+ *
+ * OID4VP 1.0 §6.4.2, and it is two rules rather than one:
+ *
+ *   - with no `credential_sets`, every Credential Query is requested, so every
+ *     one of them has to be answered;
+ *   - with `credential_sets`, each required set is satisfied by *any one* of its
+ *     options, and every id in that option must be present.
+ *
+ * Returns a description of the first unmet requirement, or undefined if the
+ * response covers what was asked. `@openid4vc/openid4vp` performs its own DCQL
+ * matching over the response, but it decides what the wallet may return; this
+ * decides whether what arrived is enough for the caller to be told yes. A
+ * verifier that skips it hands back a presentation missing the credential its
+ * whole decision rests on, marked verified.
+ */
+export function unsatisfiedRequirement(query: DcqlQuery, answered: ReadonlySet<string>): string | undefined {
+  if (!query.credential_sets) {
+    const missing = query.credentials.find((credential) => !answered.has(credential.id));
+    return missing && `no presentation for credential query "${missing.id}"`;
+  }
+
+  for (const set of query.credential_sets) {
+    if (set.required === false) continue;
+    const satisfied = set.options.some((option) => option.every((id) => answered.has(id)));
+    if (!satisfied) {
+      const options = set.options.map((option) => `[${option.join(', ')}]`).join(' or ');
+      return `no credential set option was satisfied; needed ${options}`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A credential the response would still have answered the query without.
+ *
+ * The general form of a check this library used to make in one special case:
+ * a query offering an SD-JWT VC *or* an mdoc, answered with both, used to be
+ * rejected as "answers both credential queries; expected one". The reason is
+ * not arithmetic — it is that the holder disclosed a credential the verifier
+ * did not need, and a relying party that accepts it has collected data its own
+ * query says it had no basis for.
+ *
+ * "Not needed" is decided by removing it: if what remains still satisfies the
+ * query, it was surplus. A query asking for two credentials outright keeps
+ * both, since dropping either leaves it unanswered.
+ *
+ * Returns the id of the first surplus credential, or undefined.
+ */
+export function redundantCredential(query: DcqlQuery, answered: ReadonlySet<string>): string | undefined {
+  if (unsatisfiedRequirement(query, answered)) return undefined; // Unanswered, not over-answered.
+
+  for (const id of answered) {
+    const without = new Set(answered);
+    without.delete(id);
+    if (!unsatisfiedRequirement(query, without)) return id;
+  }
+  return undefined;
 }

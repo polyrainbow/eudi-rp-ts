@@ -27,8 +27,13 @@ export type VerifierIdentity = {
   /** Access certificate chain and key, PEM. Required for `x509_san_dns`. */
   accessCertificateChainPem: string | undefined;
   accessCertificatePrivateKeyPem: string | undefined;
-  /** Credential type to request. */
-  requestedVct: string;
+  /**
+   * Name shown to the holder in the wallet's consent screen.
+   *
+   * Defaults to a generic one. It used to say "eudi-rp-ts age check", which
+   * described the library's only question rather than the verifier asking it.
+   */
+  clientName?: string;
   /** How long a request stays valid. */
   requestTtlSeconds: number;
   /** Verify credential status lists. Leave true unless deliberately offline. */

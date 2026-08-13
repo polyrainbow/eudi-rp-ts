@@ -162,7 +162,7 @@ export async function verifyDeviceResponse(
   emit({
     type: 'verification.accepted',
     format: 'mso_mdoc',
-    credentialType: verified.value.docType,
+    credentialTypes: [verified.value.docType],
     durationMs: Date.now() - startedAt,
   });
 
@@ -222,7 +222,7 @@ export async function verifyAgeOver18Mdoc(
   emit({
     type: 'verification.accepted',
     format: 'mso_mdoc',
-    credentialType: verified.value.docType,
+    credentialTypes: [verified.value.docType],
     evidence: age.value.evidence,
     durationMs: Date.now() - startedAt,
   });

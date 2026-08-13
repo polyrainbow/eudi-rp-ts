@@ -8,7 +8,7 @@ import { verifyAgeOver18Mdoc, verifyDeviceResponse } from '../src/mdoc/device-re
 import { buildSessionTranscript } from '../src/mdoc/session-transcript.ts';
 import { verifyMdoc } from '../src/mdoc/verify.ts';
 import { verifyPresentationResponse } from '../src/oid4vp/response.ts';
-import { PID_MDOC_NAMESPACE } from '../src/oid4vp/query.ts';
+import { PID_MDOC_NAMESPACE } from '../src/presets/eudi-pid.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { resolveIssuerKeyFromX5c } from '../src/trust/issuer-key.ts';
 import { verifyAgeOver18SdJwtVc, verifySdJwtVc } from '../src/verify.ts';

@@ -300,7 +300,7 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
   emit({
     type: 'verification.accepted',
     format: 'mso_mdoc',
-    credentialType: docType,
+    credentialTypes: [docType],
     durationMs: Date.now() - startedAt,
   });
 

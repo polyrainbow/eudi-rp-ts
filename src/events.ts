@@ -55,10 +55,20 @@ export type VerificationEvent =
       outcome: 'good' | 'revoked' | 'unavailable' | 'no-mechanism' | 'not-checked';
       via: 'crl' | 'ocsp' | undefined;
     }
+  /**
+   * `credentialTypes` is a list because one verification can cover more than
+   * one credential: `verifyPresentationResponse` verifies everything a DCQL
+   * query asked for and reaches a single verdict over the set. The
+   * single-credential verifiers emit a list of one.
+   *
+   * `format` is undefined only when that set spans both formats, where naming
+   * one would be naming the wrong one. A single credential always has a format,
+   * and so does a set that agrees on it.
+   */
   | {
       type: 'verification.accepted';
-      format: CredentialFormat;
-      credentialType: string;
+      format: CredentialFormat | undefined;
+      credentialTypes: readonly string[];
       evidence?: string;
       durationMs: number;
     }

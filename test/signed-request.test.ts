@@ -9,7 +9,7 @@ import type { Config } from '../app/config.ts';
 import { createVerifierServer } from '../app/http/server.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { createAccessCertificate } from '../scripts/make-access-cert.ts';
-import { CREDENTIAL_QUERY_ID } from '../src/oid4vp/query.ts';
+import { AGE_OVER_18_SD_JWT_QUERY_ID, ageOver18Query } from '../src/presets/age-over-18.ts';
 import { encryptResponse, presentAgeOver18 } from './wallet.ts';
 
 const DNS_NAME = 'verifier.test';
@@ -35,6 +35,7 @@ before(async () => {
     accessCertificateChainPem: cert.chainPem,
     accessCertificatePrivateKeyPem: cert.keyPem,
     requestedVct: 'urn:eudi:pid:1',
+    query: ageOver18Query({ vct: 'urn:eudi:pid:1' }),
     requestTtlSeconds: 300,
     checkStatus: false,
     checkCertificateRevocation: false,
@@ -154,7 +155,7 @@ describe('signed request (x509_san_dns)', () => {
     // key, so `state` is not visible in the body. The session is identified by
     // the response_uri path instead — which is the bug this test pins.
     const response = await encryptResponse({
-      vpToken: { [CREDENTIAL_QUERY_ID]: [presentation] },
+      vpToken: { [AGE_OVER_18_SD_JWT_QUERY_ID]: [presentation] },
       state: request.state,
       encryptionJwk: request.client_metadata.jwks.keys[0],
       ...(request.client_metadata.encrypted_response_enc_values_supported?.[0]

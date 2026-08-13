@@ -1,9 +1,13 @@
 # eudi-rp-ts
 
-An EU Digital Identity relying party in Node/TypeScript. It proves one
-predicate — **age over 18** — from an SD-JWT VC or an ISO 18013-5 mdoc, over
-OpenID4VP. Both formats have verified a PID presented by the EUDI reference
-wallet.
+An EU Digital Identity relying party in Node/TypeScript. It verifies SD-JWT VC
+and ISO 18013-5 mdoc credentials over OpenID4VP: you supply the DCQL query, it
+checks the answer against that query and hands back the credentials. Both
+formats have verified a PID presented by the EUDI reference wallet.
+
+The demo asks one question — **age over 18** — and that question lives in
+`src/presets/`, not in the verification path. It is a query plus a predicate,
+which is what any other question is too.
 
 The official EUDI implementations are Kotlin, Swift and Python. The one
 TypeScript repo in the `eu-digital-identity-wallet` org is an Angular UI that
@@ -69,6 +73,8 @@ src/events.ts             typed audit events; carries no personal data
 src/fetching.ts           outbound HTTP policy: deadline, size cap, TTL cache
 src/verify.ts             credential verification, orchestration
 src/predicate/age.ts      age_equal_or_over["18"], birthdate
+src/presets/age-over-18.ts      one question: the DCQL query and the predicate over its answer
+src/presets/eudi-pid.ts         the PID's vct, doc type and namespace
 src/trust/anchors.ts      the trust anchor set
 src/trust/issuer-key.ts   x5c resolution + chain validation   <- the part no library does
 src/trust/policy-tree.ts  RFC 5280 §6.1 certificate policy processing
@@ -83,9 +89,9 @@ src/mdoc/device-response.ts     DeviceResponse + device authentication
 src/mdoc/cose.ts          COSE_Sign1 verification
 src/mdoc/session-transcript.ts  the OID4VP handover a device signature commits to
 src/oid4vp/identity.ts    who this verifier is on the wire
-src/oid4vp/query.ts       DCQL query types, and the age-over-18 query built with them
+src/oid4vp/query.ts       DCQL query types, and the readers that check a response against one
 src/oid4vp/request.ts     authorization request (+ JAR)
-src/oid4vp/response.ts    response validation, hand-off to whichever verifier
+src/oid4vp/response.ts    response validation, query-driven hand-off to the verifiers
 src/oid4vp/callbacks.ts   the crypto callbacks @openid4vc/openid4vp requires
 
 app/config.ts             environment -> library options
@@ -139,6 +145,74 @@ both produce, so it names neither: the mdoc path used to fill a field called
 which is right for the EUDI PID, where they coincide, and wrong for an ISO mDL,
 where the doc type is `org.iso.18013.5.1.mDL` and the namespace is
 `org.iso.18013.5.1`.
+
+### Asking your own question
+
+The two calls above verify one credential you already hold. Over OpenID4VP you
+also have to ask for it, and **the DCQL query is the argument that decides
+everything downstream**: which formats may answer, which `vct` or doc type each
+must carry, which combinations are enough, and what
+`client_metadata.vp_formats_supported` advertises. `verifyPresentationResponse`
+reads the query back off the request that was sent, so the answer is checked
+against exactly what was asked.
+
+```ts
+import { buildAuthorizationRequest, verifyPresentationResponse } from '@sauseschritt/eudi-rp-ts';
+
+const query = {
+  credentials: [
+    {
+      id: 'holder_name',
+      format: 'dc+sd-jwt',
+      meta: { vct_values: ['urn:eudi:pid:1'] },
+      require_cryptographic_holder_binding: true,
+      claims: [{ path: ['given_name'] }, { path: ['family_name'] }],
+    },
+  ],
+} as const;
+
+const request = await buildAuthorizationRequest(identity, query);
+// ... hand request.walletUri to the holder, store request.requestPayload ...
+
+const outcome = await verifyPresentationResponse(
+  { config: identity, anchors, nonce: request.nonce, requestPayload, decryptionJwk },
+  authorizationResponse,
+);
+if (outcome.verified) {
+  for (const credential of outcome.value.credentials) {
+    console.log(credential.queryId, credential.format, credential.claims);
+  }
+}
+```
+
+A verified presentation is a *set*: `credentials` in the order the `vp_token`
+listed them, and `byQueryId` keyed by Credential Query id. `claims` is the
+format's own structure — a plain object for SD-JWT VC, `{ namespace: { element:
+value } }` for mdoc — which is what a DCQL claims path addresses (OID4VP 1.0
+§7.2), so a path taken from the query reads either.
+
+Verifying every credential the query asked for is the default test. A question
+about what the credentials *say* is a predicate, supplied by the caller and
+evaluated before the verdict, so that one `verification.accepted` covers both:
+
+```ts
+import { ageOver18Predicate, ageOver18Query } from '@sauseschritt/eudi-rp-ts';
+
+const request = await buildAuthorizationRequest(identity, ageOver18Query());
+const outcome = await verifyPresentationResponse(
+  { ...context, predicate: ageOver18Predicate },
+  authorizationResponse,
+);
+if (outcome.verified) console.log(outcome.value.predicate.evidence); // 'birthdate'
+```
+
+`ageOver18Query` and `ageOver18Predicate` are a preset — the pair the demo uses,
+and the model for your own. Nothing in the verification path imports them.
+
+The response is also checked for answering *no more* than the query needed. A
+wallet answering both alternatives of a query that offered a choice is rejected
+before either credential is verified: the holder disclosed a credential the
+verifier had no basis to ask for, and verifying it is the act of collecting it.
 
 **The demo in `app/` is a demo.** In-memory sessions, no auth, one page. Do not
 deploy it as-is; use the library inside your own service.
@@ -836,16 +910,22 @@ issuer signature has verified. It appears on `verification.accepted` instead.
 
 **Exactly one `verification.accepted` or `verification.rejected` per
 verification, and the outermost verifier owns it.** A credential can verify
-perfectly and still be rejected afterwards — by the age predicate, or by mdoc
-device authentication, neither of which the inner verifier knows about. So
+perfectly and still be rejected afterwards — by a predicate, or by mdoc device
+authentication, neither of which the inner verifier knows about. So
 `verifyAgeOver18SdJwtVc`, `verifyDeviceResponse` and `verifyPresentationResponse`
 withhold the verdict until it is one, letting every intermediate event through
 in the meantime. Without that the trail records an acceptance for a presentation
 the caller was told to reject, which is the single claim it exists to make.
-`verification.accepted` also carries `evidence` — which of the two ways the age
-predicate was satisfied, and therefore whether the holder disclosed a boolean or
-a full date of birth. An envelope rejection, where the wallet declined before
-any credential was seen, has no `format` at all rather than a guessed one.
+
+`verifyPresentationResponse` is the case that makes the rule load-bearing rather
+than tidy: it can verify several credentials for one query, so one verdict per
+credential would report acceptances nobody was given. `credentialTypes` is a
+list for that reason, and `format` is undefined only when the set spans both
+formats. `verification.accepted` also carries `evidence` when a predicate
+supplied one — for the age predicate, which of the two ways it was satisfied,
+and therefore whether the holder disclosed a boolean or a full date of birth. An
+envelope rejection, where the wallet declined before any credential was seen,
+has no `format` at all rather than a guessed one.
 
 `app/audit.ts` is a worked example: the demo turns the events into one JSON
 object per line, binding each to the presentation id — the library has no notion
@@ -857,9 +937,9 @@ round trip against the reference issuer's credential looks like this:
 
 ```json
 {"at":"…","presentation":"04cb0a12-…","type":"presentation.requested","vct":"urn:eudi:pid:1","clientIdPrefix":"redirect_uri"}
-{"at":"…","presentation":"04cb0a12-…","type":"verification.started","format":"dc+sd-jwt","vct":"urn:eudi:pid:1"}
+{"at":"…","presentation":"04cb0a12-…","type":"verification.started","format":"dc+sd-jwt","credentialType":"urn:eudi:pid:1"}
 {"at":"…","presentation":"04cb0a12-…","type":"issuer.resolved","format":"dc+sd-jwt","subject":"CN=PID DS - 002…","chainLength":2}
-{"at":"…","presentation":"04cb0a12-…","type":"verification.accepted","format":"dc+sd-jwt","vct":"urn:eudi:pid:1","evidence":"birthdate","durationMs":14}
+{"at":"…","presentation":"04cb0a12-…","type":"verification.accepted","format":"dc+sd-jwt","credentialTypes":["urn:eudi:pid:1"],"evidence":"birthdate","durationMs":14}
 ```
 
 `evidence: "birthdate"` is the privacy fact worth having in a record: the

@@ -4,12 +4,14 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { buildSessionTranscript } from '../src/mdoc/session-transcript.ts';
 import {
-  CREDENTIAL_QUERY_ID,
-  MDOC_CREDENTIAL_QUERY_ID,
-  PID_MDOC_NAMESPACE,
+  AGE_OVER_18_MDOC_QUERY_ID,
+  AGE_OVER_18_SD_JWT_QUERY_ID,
+  ageOver18Predicate,
   ageOver18Query,
-} from '../src/oid4vp/query.ts';
-import { verifyPresentationResponse } from '../src/oid4vp/response.ts';
+} from '../src/presets/age-over-18.ts';
+import { PID_MDOC_NAMESPACE } from '../src/presets/eudi-pid.ts';
+import { type PresentationContext, verifyPresentationResponse } from '../src/oid4vp/response.ts';
+import type { AgeResult } from '../src/predicate/age.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { buildDeviceResponse } from './mdoc-wallet.ts';
 
@@ -30,7 +32,6 @@ const identity = {
   clientDnsName: undefined,
   accessCertificateChainPem: undefined,
   accessCertificatePrivateKeyPem: undefined,
-  requestedVct: 'urn:eudi:pid:1',
   requestTtlSeconds: 300,
   checkStatus: false,
   checkCertificateRevocation: false,
@@ -43,10 +44,10 @@ const requestPayload = {
   response_mode: 'direct_post',
   nonce: NONCE,
   state: 'st',
-  dcql_query: ageOver18Query('urn:eudi:pid:1'),
+  dcql_query: ageOver18Query(),
 };
 
-const context = {
+const context: PresentationContext<AgeResult> = {
   config: identity,
   anchors,
   nonce: NONCE,
@@ -55,6 +56,9 @@ const context = {
   // The reference credential's validUntil is malformed; strict handling of
   // that is covered in mdoc.test.ts.
   tolerateMalformedMdocValidity: true,
+  // The question is the caller's now. Without it the presentation still
+  // verifies — it just says nothing about the holder's age.
+  predicate: ageOver18Predicate,
 };
 
 const present = (overrides = {}) =>
@@ -74,18 +78,18 @@ const present = (overrides = {}) =>
 
 describe('the DCQL query offers both formats', () => {
   it('asks for either credential, not both', () => {
-    const query = ageOver18Query('urn:eudi:pid:1');
+    const query = ageOver18Query();
 
-    assert.deepEqual(query.credentials.map((c) => c.format), ['dc+sd-jwt', 'mso_mdoc']);
+    assert.deepEqual(query.credentials.map((credential) => credential.format), ['dc+sd-jwt', 'mso_mdoc']);
     // Without credential_sets the wallet is asked for *all* listed credentials
     // (OID4VP 1.0 §6.4.2), which no holder has — so it returns nothing.
     assert.deepEqual(query.credential_sets, [
-      { options: [[CREDENTIAL_QUERY_ID], [MDOC_CREDENTIAL_QUERY_ID]] },
+      { options: [[AGE_OVER_18_SD_JWT_QUERY_ID], [AGE_OVER_18_MDOC_QUERY_ID]] },
     ]);
   });
 
   it('uses the mdoc spelling for the mdoc alternative', () => {
-    const mdoc = ageOver18Query('urn:eudi:pid:1').credentials[1]!;
+    const mdoc = ageOver18Query().credentials[1]!;
     // Narrowed rather than asserted, because `meta` means something different
     // in each format: reading `doctype_value` is only a question worth asking
     // once this is the mdoc alternative.
@@ -93,7 +97,7 @@ describe('the DCQL query offers both formats', () => {
 
     assert.equal(mdoc.meta.doctype_value, PID_MDOC_NAMESPACE);
     assert.deepEqual(
-      mdoc.claims?.map((c) => c.path),
+      mdoc.claims?.map((claim) => claim.path),
       [
         [PID_MDOC_NAMESPACE, 'age_over_18'],
         [PID_MDOC_NAMESPACE, 'birth_date'],
@@ -112,8 +116,8 @@ describe('mdoc through the OID4VP response handler', () => {
       responseUri: 'https://attacker.test/collect',
     });
 
-    const result = await verifyPresentationResponse(context as never, {
-      vp_token: { [MDOC_CREDENTIAL_QUERY_ID]: [present({ signOverTranscript: elsewhere })] },
+    const result = await verifyPresentationResponse(context, {
+      vp_token: { [AGE_OVER_18_MDOC_QUERY_ID]: [present({ signOverTranscript: elsewhere })] },
       state: 'st',
     });
 
@@ -126,32 +130,37 @@ describe('mdoc through the OID4VP response handler', () => {
     // element digests, device signature over the SessionTranscript, and the
     // age predicate resolved from birth_date — the mdoc PID carries no
     // age_over_18, so this is the only route.
-    const result = await verifyPresentationResponse(context as never, {
-      vp_token: { [MDOC_CREDENTIAL_QUERY_ID]: [present()] },
+    const result = await verifyPresentationResponse(context, {
+      vp_token: { [AGE_OVER_18_MDOC_QUERY_ID]: [present()] },
       state: 'st',
     });
 
     assert.equal(result.verified, true, JSON.stringify(result));
-    assert.equal(result.value.evidence, 'birthdate');
+    assert.equal(result.value.predicate.evidence, 'birthdate');
   });
 
-  it('refuses a response answering both credential queries', async () => {
-    const result = await verifyPresentationResponse(context as never, {
+  it('refuses a response answering more than the query needed', async () => {
+    const result = await verifyPresentationResponse(context, {
       vp_token: {
-        [CREDENTIAL_QUERY_ID]: ['not-a-real-sd-jwt'],
-        [MDOC_CREDENTIAL_QUERY_ID]: [present()],
+        [AGE_OVER_18_SD_JWT_QUERY_ID]: ['not-a-real-sd-jwt'],
+        [AGE_OVER_18_MDOC_QUERY_ID]: [present()],
       },
       state: 'st',
     });
 
     assert.equal(result.verified, false);
-    assert.match(result.detail, /both credential queries/);
+    // Over-disclosure, decided from the query rather than from a rule about
+    // these two ids: either credential answers it, so both is one more than we
+    // asked for. Rejected before either is verified, which is why the malformed
+    // SD-JWT here is not what comes back.
+    assert.equal(result.reason, 'RESPONSE_INVALID');
+    assert.match(result.detail, /which the query did not need/);
   });
 
   it('rejects the reference credential when strict about validity', async () => {
     const strict = { ...context, tolerateMalformedMdocValidity: false };
-    const result = await verifyPresentationResponse(strict as never, {
-      vp_token: { [MDOC_CREDENTIAL_QUERY_ID]: [present()] },
+    const result = await verifyPresentationResponse(strict, {
+      vp_token: { [AGE_OVER_18_MDOC_QUERY_ID]: [present()] },
       state: 'st',
     });
 
@@ -161,7 +170,7 @@ describe('mdoc through the OID4VP response handler', () => {
   });
 
   it('refuses a response answering neither', async () => {
-    const result = await verifyPresentationResponse(context as never, {
+    const result = await verifyPresentationResponse(context, {
       vp_token: { something_else: ['x'] },
       state: 'st',
     });

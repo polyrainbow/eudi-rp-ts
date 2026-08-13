@@ -13,7 +13,7 @@ import { base64urlEncode, hasher } from '../src/crypto.ts';
  */
 const SIGN = { name: 'ECDSA', hash: 'SHA-256' } as const;
 
-export async function presentAgeOver18(options: {
+export type PresentOptions = {
   issuedCredential: string;
   holderPrivateJwk: webcrypto.JsonWebKey;
   /** OID4VP `nonce` from the authorization request. */
@@ -22,7 +22,18 @@ export async function presentAgeOver18(options: {
   audience: string;
   /** Override to test a wallet that discloses the wrong thing. */
   presentationFrame?: object;
-}): Promise<string> {
+};
+
+/**
+ * Disclose whatever the frame names — a wallet answering a query that is not
+ * about age, which is what the library now supports and what
+ * `test/generic-query.test.ts` exercises.
+ */
+export async function presentSdJwtVc(options: PresentOptions): Promise<string> {
+  return await presentAgeOver18(options);
+}
+
+export async function presentAgeOver18(options: PresentOptions): Promise<string> {
   const holderKey = await webcrypto.subtle.importKey(
     'jwk',
     options.holderPrivateJwk,

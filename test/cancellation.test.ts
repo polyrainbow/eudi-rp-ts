@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { fetchBytes } from '../src/fetching.ts';
 import { verifyMdoc } from '../src/mdoc/verify.ts';
 import { verifyPresentationResponse } from '../src/oid4vp/response.ts';
-import { PID_MDOC_NAMESPACE } from '../src/oid4vp/query.ts';
+import { PID_MDOC_NAMESPACE } from '../src/presets/eudi-pid.ts';
 import type { Outcome, ReasonCode, Rejected } from '../src/result.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { createStatusListCache } from '../src/trust/status.ts';
@@ -150,7 +150,6 @@ describe('cancelling a verification', () => {
           clientDnsName: undefined,
           accessCertificateChainPem: undefined,
           accessCertificatePrivateKeyPem: undefined,
-          requestedVct: 'urn:eudi:pid:1',
           requestTtlSeconds: 300,
           checkStatus: false,
           checkCertificateRevocation: false,

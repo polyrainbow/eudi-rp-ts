@@ -6,6 +6,7 @@ import { auditPresentation, auditSink } from '../audit.ts';
 import type { Config } from '../config.ts';
 import { buildAuthorizationRequest } from '../../src/oid4vp/request.ts';
 import { verifyPresentationResponse } from '../../src/oid4vp/response.ts';
+import { ageOver18Predicate } from '../../src/presets/age-over-18.ts';
 import type { TrustAnchors } from '../../src/trust/anchors.ts';
 import { createStatusListCache } from '../../src/trust/status.ts';
 import { createRevocationCache } from '../../src/trust/revocation.ts';
@@ -67,7 +68,7 @@ export function createVerifierServer(
         return;
       }
 
-      const request = await buildAuthorizationRequest(config);
+      const request = await buildAuthorizationRequest(config, config.query);
       const session = sessions.create({
         nonce: request.nonce,
         state: request.state,
@@ -173,6 +174,10 @@ export function createVerifierServer(
         requestPayload: session.requestPayload,
         decryptionJwk: session.decryptionJwk,
         onEvent: auditSink(session.id),
+        // The demo's question, applied to whatever the query brought back. The
+        // library verifies credentials; deciding that they mean "18 or over" is
+        // the relying party's, and this is where that is said.
+        predicate: ageOver18Predicate,
         // A bound on the whole check, which the per-request timeouts inside the
         // library are not: one verification can fetch a status list and then a
         // CRL per certificate.
@@ -192,10 +197,12 @@ export function createVerifierServer(
       outcome.verified
         ? {
             verified: true,
-            format: outcome.value.format,
-            evidence: outcome.value.evidence,
-            credentialType: outcome.value.credentialType,
-            issuer: outcome.value.issuerCertificateSubject,
+            evidence: outcome.value.predicate.evidence,
+            credentials: outcome.value.credentials.map((credential) => ({
+              format: credential.format,
+              credentialType: credential.credentialType,
+              issuer: credential.issuerCertificateSubject,
+            })),
           }
         : { verified: false, reason: outcome.reason, detail: outcome.detail },
     );

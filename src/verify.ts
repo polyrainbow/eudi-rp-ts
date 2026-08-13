@@ -42,8 +42,14 @@ export type VerifySdJwtVcOptions = {
   /** Compact SD-JWT VC, optionally with a trailing Key Binding JWT. */
   credential: string;
   anchors: TrustAnchors;
-  /** Expected `vct`. Omit to accept any type. */
-  expectedVct?: string;
+  /**
+   * Expected `vct`, or several of which any one will do. Omit to accept any type.
+   *
+   * A list because that is the shape DCQL states it in — `meta.vct_values` is
+   * an array (OID4VP 1.0 Appendix B.3.5) — and a verifier checking the response
+   * against the query it sent should not have to narrow it first.
+   */
+  expectedVct?: string | readonly string[];
   /**
    * Required unless `requireKeyBinding` is false. `@sd-jwt/core` skips key
    * binding entirely when no nonce is supplied, even if a KB-JWT is present,
@@ -332,8 +338,15 @@ export async function verifySdJwtVc(
   const claims = result.payload as unknown as Record<string, unknown>;
   const vct = typeof claims['vct'] === 'string' ? claims['vct'] : undefined;
   if (!vct) return rejectWith(reject('CREDENTIAL_MALFORMED', 'Credential has no `vct` claim'));
-  if (options.expectedVct && vct !== options.expectedVct) {
-    return rejectWith(reject('UNEXPECTED_CREDENTIAL_TYPE', `Expected vct ${options.expectedVct}, got ${vct}`));
+  if (options.expectedVct !== undefined) {
+    const accepted = typeof options.expectedVct === 'string' ? [options.expectedVct] : options.expectedVct;
+    // An empty list is "no vct is acceptable", not "any is": a caller that
+    // narrowed the acceptable types down to nothing asked for nothing.
+    if (!accepted.includes(vct)) {
+      return rejectWith(
+        reject('UNEXPECTED_CREDENTIAL_TYPE', `Expected vct ${accepted.join(' or ') || '(none)'}, got ${vct}`),
+      );
+    }
   }
 
   let keyBinding: VerifiedCredential['keyBinding'];
@@ -391,7 +404,7 @@ export async function verifySdJwtVc(
   emit({
     type: 'verification.accepted',
     format: 'dc+sd-jwt',
-    credentialType: vct,
+    credentialTypes: [vct],
     durationMs: Date.now() - startedAt,
   });
 
@@ -442,7 +455,7 @@ export async function verifyAgeOver18SdJwtVc(
   emit({
     type: 'verification.accepted',
     format: 'dc+sd-jwt',
-    credentialType: credential.value.credentialType,
+    credentialTypes: [credential.value.credentialType],
     evidence: age.value.evidence,
     durationMs: Date.now() - startedAt,
   });

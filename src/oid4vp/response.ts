@@ -3,20 +3,82 @@ import type { JWK } from 'jose';
 import type { TtlCache } from '../fetching.ts';
 import type { VerifierIdentity } from './identity.ts';
 import { type Outcome, type Rejected, accept, reject } from '../result.ts';
-import { type CredentialFormat, type EventSink, noopSink } from '../events.ts';
+import { type CredentialFormat, type EventSink, noopSink, withoutVerdict } from '../events.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
-import { type AgeResult, type VerifiedCredential, verifyAgeOver18SdJwtVc } from '../verify.ts';
+import { type VerifiedCredential, verifySdJwtVc } from '../verify.ts';
 import { createDecryptJwe, createVerifyJwt, generateRandom, hashCallback } from './callbacks.ts';
-import { CREDENTIAL_QUERY_ID, MDOC_CREDENTIAL_QUERY_ID, PID_MDOC_NAMESPACE } from './query.ts';
-import { verifyAgeOver18Mdoc } from '../mdoc/device-response.ts';
+import {
+  type CredentialQuery,
+  type DcqlQuery,
+  type MdocCredentialQuery,
+  type SdJwtVcCredentialQuery,
+  credentialQueryById,
+  redundantCredential,
+  unsatisfiedRequirement,
+} from './query.ts';
+import { verifyDeviceResponse } from '../mdoc/device-response.ts';
 import { buildSessionTranscript, jwkThumbprint } from '../mdoc/session-transcript.ts';
 
 /** Which credential format actually answered. */
 export type PresentedFormat = CredentialFormat;
 
-export type VerifiedPresentation = VerifiedCredential & AgeResult & { format: PresentedFormat };
+/**
+ * One verified credential, and the Credential Query it answers.
+ *
+ * `claims` is the format's own structure, not a normalised one: an SD-JWT VC's
+ * disclosed claims are a plain object, while an mdoc's are
+ * `{ namespace: { element: value } }`. That is deliberate — OID4VP 1.0 §7.2
+ * defines a claims path over exactly those two shapes, so a `ClaimsPath` taken
+ * from the query reads either without the caller knowing which arrived. It also
+ * used to be flattened to a single hardcoded PID namespace, which silently
+ * discarded every other namespace an mdoc carried.
+ */
+export type PresentedCredential = VerifiedCredential & {
+  /** The `id` of the Credential Query this answers, and its `vp_token` key. */
+  queryId: string;
+  format: PresentedFormat;
+};
 
-export type PresentationContext = {
+/** What the wallet returned, before any predicate is applied to it. */
+export type PresentedCredentials = {
+  /** In the order the `vp_token` listed them. */
+  credentials: readonly PresentedCredential[];
+  /**
+   * The same credentials keyed by Credential Query id — the useful index when a
+   * query asks for more than one thing, or offers alternatives and the caller
+   * needs to know which was taken. Arrays because a query may set `multiple`.
+   */
+  byQueryId: Record<string, readonly PresentedCredential[]>;
+};
+
+/**
+ * A rule over the whole answer, evaluated after every credential in it has been
+ * verified and before the verdict is decided.
+ *
+ * The set rather than one credential is the right unit: a query offering two
+ * formats is answered by either, and a query asking for two credentials is only
+ * answered by both. `presets/age-over-18.ts` is one of these.
+ *
+ * `evidence` is a short non-identifying label for *how* the rule was satisfied,
+ * put on `verification.accepted`. For the age predicate that is the privacy
+ * distinction — the issuer's boolean discloses nothing else, a date of birth
+ * discloses a date of birth — and an audit trail that cannot tell them apart
+ * cannot say what the verifier learned.
+ */
+export type PredicateResult<T> = { value: T; evidence?: string };
+
+export type PresentationPredicate<T> = (
+  presented: PresentedCredentials,
+  now: Date,
+) => Outcome<PredicateResult<T>>;
+
+/**
+ * A verified presentation: the credentials, and whatever the predicate made of
+ * them. `predicate` is `undefined` when no predicate was supplied.
+ */
+export type VerifiedPresentation<T = undefined> = PresentedCredentials & { predicate: T };
+
+export type PresentationContext<T = undefined> = {
   config: VerifierIdentity;
   /** Shared status list cache, if the application keeps one. */
   statusCache?: TtlCache<string>;
@@ -37,10 +99,15 @@ export type PresentationContext = {
    * Receives structured events for auditing and metrics. Carries no personal
    * data by construction — see `src/events.ts`.
    *
-   * Passed to whichever credential verifier answers, so the stream is the same
-   * either way. The envelope rejections this function makes itself — a wallet
-   * that declined, a response that would not parse — are emitted here with no
-   * format, because at that point no credential has been seen.
+   * Passed to every credential verifier that runs, so the stream is the same
+   * whatever format answered. The envelope rejections this function makes
+   * itself — a wallet that declined, a response that would not parse — are
+   * emitted here with no format, because at that point no credential has been
+   * seen.
+   *
+   * The verdict is this function's: it can verify several credentials, and one
+   * `verification.accepted` per credential would report an acceptance nobody
+   * was given. The inner verifiers therefore see a `withoutVerdict` sink.
    */
   onEvent?: EventSink;
   /**
@@ -53,37 +120,66 @@ export type PresentationContext = {
    * the session unanswered.
    */
   signal?: AbortSignal;
+  /**
+   * The DCQL query this response answers.
+   *
+   * Optional because the default is to read it back out of `requestPayload`,
+   * where `buildAuthorizationRequest` put it — the request actually sent is the
+   * authority on what the answer has to satisfy, and a copy passed separately
+   * is a second thing to keep in step.
+   */
+  query?: DcqlQuery;
+  /**
+   * A rule over the verified credentials, evaluated before the verdict.
+   *
+   * Without one, "every credential the query asked for verified" is the whole
+   * test — which is the right default for a query that asks for attributes, and
+   * not enough for one that asks a question. `presets/age-over-18.ts` is the
+   * predicate this library used to apply unconditionally.
+   */
+  predicate?: PresentationPredicate<T>;
+  now?: Date;
 };
 
 /**
- * Validate an OID4VP authorization response and verify the credential inside it.
+ * Validate an OID4VP authorization response and verify the credentials in it.
  *
  * Two distinct layers, and it is worth keeping them distinct:
  *
  *  1. `@openid4vc/openid4vp` handles the protocol envelope — JARM decryption,
  *     response shape, and matching the returned Presentations against the DCQL
  *     query we sent.
- *  2. Our Phase 1 verifier handles the credential — issuer trust, signature,
- *     disclosures, key binding, predicate.
+ *  2. Our credential verifiers handle each credential — issuer trust,
+ *     signature, disclosures, key binding.
  *
  * Layer 1 says "the wallet answered the question we asked". Only layer 2 says
- * "and the answer is backed by a credential we trust".
+ * "and the answer is backed by credentials we trust". An optional `predicate`
+ * is the third thing, and the caller's: "and the answer means what we needed".
+ *
+ * **Everything specific to the question comes from the query.** Which formats
+ * may answer, which `vct` or doc type each must carry, which combinations are
+ * enough — all of it is read back off the request that was sent, so asking
+ * something else requires no change here. It used to be two module constants
+ * naming the age query's two ids, which meant a second query could be built and
+ * sent but never verified.
  */
-export async function verifyPresentationResponse(
-  context: PresentationContext,
+export async function verifyPresentationResponse<T = undefined>(
+  context: PresentationContext<T>,
   authorizationResponse: Record<string, unknown>,
-): Promise<Outcome<VerifiedPresentation>> {
+): Promise<Outcome<VerifiedPresentation<T>>> {
   const emit = context.onEvent ?? noopSink;
   const startedAt = Date.now();
 
   /**
-   * Envelope-level rejections only. Once a credential verifier runs it owns the
-   * verdict, so nothing below that delegates goes through here.
+   * Every verdict is this function's, so every rejection goes through here —
+   * including the ones a credential verifier produced, which run against a
+   * `withoutVerdict` sink precisely so their rejection is reported once, here,
+   * with the format it belongs to.
    */
-  const rejectWith = (outcome: Rejected): Rejected => {
+  const rejectWith = (outcome: Rejected, format?: PresentedFormat): Rejected => {
     emit({
       type: 'verification.rejected',
-      format: undefined,
+      format,
       reason: outcome.reason,
       durationMs: Date.now() - startedAt,
     });
@@ -134,31 +230,134 @@ export async function verifyPresentationResponse(
   }
   const token = vpToken as Record<string, unknown>;
 
-  // The query offers both formats as alternatives, so the wallet answers with
-  // whichever it holds. Exactly one entry is expected.
-  const sdJwt = onePresentation(token[CREDENTIAL_QUERY_ID]);
-  const mdoc = onePresentation(token[MDOC_CREDENTIAL_QUERY_ID]);
-
-  if (sdJwt.present && mdoc.present) {
-    return rejectWith(reject('RESPONSE_INVALID', 'vp_token answers both credential queries; expected one'));
-  }
-  if (sdJwt.present) {
-    return sdJwt.value
-      ? await verifySdJwtVcPresentation(context, sdJwt.value)
-      : rejectWith(reject('RESPONSE_INVALID', sdJwt.problem));
-  }
-  if (mdoc.present) {
-    return mdoc.value
-      ? await verifyMdocPresentation(context, mdoc.value)
-      : rejectWith(reject('RESPONSE_INVALID', mdoc.problem));
+  const query = context.query ?? readDcqlQuery(context.requestPayload);
+  if (!query) {
+    return rejectWith(reject('RESPONSE_INVALID', 'Stored request payload carries no dcql_query'));
   }
 
-  return rejectWith(
-    reject(
+  // Each key is a Credential Query id and each value an array of Presentations
+  // (OID4VP 1.0 §8.1). A key we did not ask about is a protocol error rather
+  // than something to ignore: nothing states what it should be checked against.
+  const answered = new Set(Object.keys(token));
+  const unknown = [...answered].find((queryId) => !credentialQueryById(query, queryId));
+  if (unknown) {
+    return rejectWith(reject('RESPONSE_INVALID', `vp_token has an entry for "${unknown}", which was not requested`));
+  }
+
+  // Whether the response answers the query is settled before anything in it is
+  // verified — it is a property of which keys arrived, and verifying
+  // credentials we are about to reject the response for is work nobody wants
+  // done. It also keeps the reason honest: a surplus credential that happens to
+  // be malformed is still a surplus credential.
+  const unmet = unsatisfiedRequirement(query, answered);
+  if (unmet) return rejectWith(reject('RESPONSE_INVALID', `Response does not answer the query: ${unmet}`));
+
+  // And no more than answers it. A wallet answering both alternatives of a
+  // query that offered a choice has disclosed a credential we had no basis to
+  // ask for, and verifying it would be the act of collecting it.
+  const surplus = redundantCredential(query, answered);
+  if (surplus) {
+    return rejectWith(reject('RESPONSE_INVALID', `Response answers "${surplus}", which the query did not need`));
+  }
+
+  const credentials: PresentedCredential[] = [];
+  const byQueryId: Record<string, PresentedCredential[]> = {};
+  const innerEvents = withoutVerdict(emit);
+
+  for (const [queryId, entry] of Object.entries(token)) {
+    // Non-null: every key was matched above, before anything was verified.
+    const credentialQuery = credentialQueryById(query, queryId)!;
+
+    const presentations = readPresentations(entry, credentialQuery);
+    if (!presentations.verified) return rejectWith(presentations, credentialQuery.format);
+
+    for (const presentation of presentations.value) {
+      const verified =
+        credentialQuery.format === 'dc+sd-jwt'
+          ? await verifySdJwtVcPresentation(context, credentialQuery, presentation, innerEvents)
+          : await verifyMdocPresentation(context, credentialQuery, presentation, innerEvents);
+      if (!verified.verified) return rejectWith(verified, credentialQuery.format);
+
+      credentials.push(verified.value);
+      (byQueryId[queryId] ??= []).push(verified.value);
+    }
+  }
+
+  const presented: PresentedCredentials = { credentials, byQueryId };
+  const format = soleFormat(credentials);
+
+  // `undefined as T` is sound only where it is reached: T defaults to undefined
+  // and is inferred from `predicate`, so this branch is the one where the
+  // caller asked for no predicate value.
+  let value = undefined as T;
+  let evidence: string | undefined;
+  if (context.predicate) {
+    const outcome = context.predicate(presented, context.now ?? new Date());
+    if (!outcome.verified) return rejectWith(outcome, format);
+    value = outcome.value.value;
+    evidence = outcome.value.evidence;
+  }
+
+  emit({
+    type: 'verification.accepted',
+    format,
+    credentialTypes: credentials.map((credential) => credential.credentialType),
+    ...(evidence === undefined ? {} : { evidence }),
+    durationMs: Date.now() - startedAt,
+  });
+
+  return accept({ ...presented, predicate: value });
+}
+
+/**
+ * The format of the presented credentials, when they agree on one.
+ *
+ * Undefined for a set spanning both, where naming one would name the wrong one
+ * — the same rule the envelope rejections follow. A query offering formats as
+ * alternatives is answered by one credential, so in practice this is a format.
+ */
+function soleFormat(credentials: readonly PresentedCredential[]): PresentedFormat | undefined {
+  const formats = new Set(credentials.map((credential) => credential.format));
+  return formats.size === 1 ? [...formats][0] : undefined;
+}
+
+/**
+ * The Presentations under one `vp_token` key (OID4VP 1.0 §8.1).
+ *
+ * Always an array in 1.0. More than one is a protocol error unless the
+ * Credential Query set `multiple`, which defaults to false (§6.1) — the wallet
+ * returning several where one was asked for means the caller is about to be
+ * handed a credential it never requested a second of.
+ */
+function readPresentations(entry: unknown, query: CredentialQuery): Outcome<readonly string[]> {
+  const presentations = Array.isArray(entry) ? entry : [entry];
+  if (presentations.length === 0) {
+    return reject('RESPONSE_INVALID', `"${query.id}" carries no Presentation`);
+  }
+  if (presentations.length > 1 && query.multiple !== true) {
+    return reject(
       'RESPONSE_INVALID',
-      `vp_token has no entry for "${CREDENTIAL_QUERY_ID}" or "${MDOC_CREDENTIAL_QUERY_ID}"`,
-    ),
-  );
+      `"${query.id}" carries ${presentations.length} Presentations; one was requested`,
+    );
+  }
+  if (!presentations.every((presentation) => typeof presentation === 'string')) {
+    return reject('RESPONSE_INVALID', `"${query.id}" carries a Presentation that is not a string`);
+  }
+  return accept(presentations as readonly string[]);
+}
+
+/**
+ * The query as it was sent.
+ *
+ * `buildAuthorizationRequest` puts it on the payload and the application stores
+ * that payload with the session, so by the time a response arrives the question
+ * is already written down. Reading it back beats being told it again.
+ */
+function readDcqlQuery(requestPayload: Record<string, unknown>): DcqlQuery | undefined {
+  const query = requestPayload['dcql_query'];
+  if (typeof query !== 'object' || query === null) return undefined;
+  const credentials = (query as { credentials?: unknown }).credentials;
+  return Array.isArray(credentials) ? (query as DcqlQuery) : undefined;
 }
 
 /**
@@ -175,7 +374,7 @@ export async function verifyPresentationResponse(
  * cannot be decrypted: that is the parser's business to report, not ours.
  */
 async function walletErrorResponse(
-  context: PresentationContext,
+  context: PresentationContext<unknown>,
   authorizationResponse: Record<string, unknown>,
 ): Promise<Rejected | undefined> {
   let payload: Record<string, unknown>;
@@ -204,9 +403,11 @@ async function walletErrorResponse(
 }
 
 async function verifySdJwtVcPresentation(
-  context: PresentationContext,
+  context: PresentationContext<unknown>,
+  query: SdJwtVcCredentialQuery,
   credential: string,
-): Promise<Outcome<VerifiedPresentation>> {
+  onEvent: EventSink,
+): Promise<Outcome<PresentedCredential>> {
   // OID4VP 1.0 Appendix B.3.6: in the Key Binding JWT the `nonce` MUST be the
   // Authorization Request nonce and `aud` MUST be the full Client Identifier,
   // prefix included (§14.8). Read off the request we sent rather than
@@ -216,10 +417,12 @@ async function verifySdJwtVcPresentation(
     return reject('RESPONSE_INVALID', 'Stored request payload has no client_id');
   }
 
-  const result = await verifyAgeOver18SdJwtVc({
+  const result = await verifySdJwtVc({
     credential,
     anchors: context.anchors,
-    expectedVct: context.config.requestedVct,
+    // The types this query asked for, so a wallet cannot answer with a
+    // credential of some other type that happens to verify.
+    ...(query.meta.vct_values ? { expectedVct: query.meta.vct_values } : {}),
     checkStatus: context.config.checkStatus,
     ...(context.statusCache ? { statusCache: context.statusCache } : {}),
     checkCertificateRevocation: context.config.checkCertificateRevocation,
@@ -228,14 +431,15 @@ async function verifySdJwtVcPresentation(
     // narrower set than was advertised would reject a wallet for answering
     // exactly what it was asked for.
     ...(context.config.allowedAlgs ? { allowedAlgs: context.config.allowedAlgs } : {}),
-    // `verifyAgeOver18SdJwtVc` owns the verdict, predicate included, so the sink goes
-    // straight through rather than being wrapped.
-    ...(context.onEvent ? { onEvent: context.onEvent } : {}),
+    onEvent,
     ...(context.signal ? { signal: context.signal } : {}),
+    ...(context.now ? { now: context.now } : {}),
     keyBinding: { nonce: context.nonce, audience },
   });
 
-  return result.verified ? accept({ ...result.value, format: 'dc+sd-jwt' as const }) : result;
+  return result.verified
+    ? accept({ ...result.value, queryId: query.id, format: 'dc+sd-jwt' as const })
+    : result;
 }
 
 /**
@@ -247,33 +451,22 @@ async function verifySdJwtVcPresentation(
  * request we sent, so a response produced for anyone else will not verify.
  */
 async function verifyMdocPresentation(
-  context: PresentationContext,
+  context: PresentationContext<unknown>,
+  query: MdocCredentialQuery,
   deviceResponse: string,
-): Promise<Outcome<VerifiedPresentation>> {
+  onEvent: EventSink,
+): Promise<Outcome<PresentedCredential>> {
   const transcript = sessionTranscriptFor(context);
-  if (!transcript.verified) {
-    // The one rejection this branch makes before delegating, so the one it has
-    // to report itself.
-    (context.onEvent ?? noopSink)({
-      type: 'verification.rejected',
-      format: 'mso_mdoc',
-      reason: transcript.reason,
-      durationMs: 0,
-    });
-    return transcript;
-  }
+  if (!transcript.verified) return transcript;
 
-  // `verifyAgeOver18Mdoc` owns the verdict, predicate included, exactly as
-  // `verifyAgeOver18SdJwtVc` does on the other branch — so the sink goes
-  // straight through and this function keeps no copy of that rule.
-  const result = await verifyAgeOver18Mdoc({
+  const result = await verifyDeviceResponse({
     deviceResponse,
     anchors: context.anchors,
     sessionTranscript: transcript.value,
-    expectedDocType: PID_MDOC_NAMESPACE,
-    // The EUDI PID's namespace and doc type coincide; said explicitly rather
-    // than left to the default, because for an mDL they would not.
-    namespace: PID_MDOC_NAMESPACE,
+    // The doc type this query asked for. Nothing here assumes the EUDI PID's,
+    // and nothing derives a namespace from it either: an mDL's doc type and
+    // namespace differ, and the namespaces are the query's to state.
+    ...(query.meta.doctype_value ? { expectedDocType: query.meta.doctype_value } : {}),
     ...(context.tolerateMalformedMdocValidity ? { tolerateMalformedValidityDates: true } : {}),
     // Same revocation policy and the same cache as the SD-JWT VC branch: the
     // format a wallet happens to answer in must not decide whether the
@@ -283,16 +476,19 @@ async function verifyMdocPresentation(
     checkCertificateRevocation: context.config.checkCertificateRevocation,
     ...(context.revocationCache ? { revocationCache: context.revocationCache } : {}),
     ...(context.config.allowedAlgs ? { allowedAlgs: context.config.allowedAlgs } : {}),
-    ...(context.onEvent ? { onEvent: context.onEvent } : {}),
+    onEvent,
     ...(context.signal ? { signal: context.signal } : {}),
+    ...(context.now ? { now: context.now } : {}),
   });
   if (!result.verified) return result;
 
   return accept({
-    ageOver18: result.value.ageOver18,
-    evidence: result.value.evidence,
+    queryId: query.id,
     format: 'mso_mdoc' as const,
-    claims: result.value.claims[PID_MDOC_NAMESPACE] ?? {},
+    // Namespace-keyed, which is the structure an mdoc claims path addresses
+    // (OID4VP 1.0 §7.2). Flattening to one namespace here is what used to
+    // discard every other namespace the wallet returned.
+    claims: result.value.claims,
     credentialType: result.value.docType,
     issuerCertificateSubject: result.value.issuerCertificateSubject,
     // mdoc binds the holder through the device signature over the session
@@ -308,7 +504,7 @@ async function verifyMdocPresentation(
  * Rebuilt from the request we sent (OID4VP 1.0 §B.2.6.1), which is what binds
  * this response to this request.
  */
-function sessionTranscriptFor(context: PresentationContext): Outcome<Uint8Array> {
+function sessionTranscriptFor(context: PresentationContext<unknown>): Outcome<Uint8Array> {
   const clientId = context.requestPayload['client_id'];
   const responseUri = context.requestPayload['response_uri'] ?? context.requestPayload['redirect_uri'];
   if (typeof clientId !== 'string' || typeof responseUri !== 'string') {
@@ -342,25 +538,6 @@ function encryptionJwkFrom(
   const key = jwks?.keys?.find((candidate) => candidate['use'] === 'enc') ?? jwks?.keys?.[0];
   if (!key || typeof key['x'] !== 'string' || typeof key['y'] !== 'string') return undefined;
   return { kty: String(key['kty']), crv: String(key['crv']), x: key['x'], y: key['y'] };
-}
-
-/**
- * One presentation from a `vp_token` entry.
- *
- * OID4VP 1.0 §8.1: each value is an array of Presentations. `multiple` was not
- * set in our query, so more than one is a protocol error.
- */
-function onePresentation(entry: unknown): { present: boolean; value?: string; problem: string } {
-  if (entry === undefined) return { present: false, problem: '' };
-  const presentations = Array.isArray(entry) ? entry : [entry];
-  if (presentations.length !== 1) {
-    return { present: true, problem: `Expected one Presentation, got ${presentations.length}` };
-  }
-  const first = presentations[0];
-  if (typeof first !== 'string') {
-    return { present: true, problem: 'Presentation is not a string' };
-  }
-  return { present: true, value: first, problem: '' };
 }
 
 function errorMessage(error: unknown): string {

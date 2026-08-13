@@ -28,7 +28,17 @@ export type Session = {
   expiresAt: number;
   status: SessionStatus;
   result:
-    | { verified: true; format: string; evidence: string; credentialType: string; issuer: string }
+    /**
+     * A list, because one presentation can answer a query that asked for
+     * several credentials. The age query offers two formats as alternatives, so
+     * this demo always sees exactly one — which is a property of the query it
+     * sends, not of the verifier.
+     */
+    | {
+        verified: true;
+        evidence: string | undefined;
+        credentials: { format: string; credentialType: string; issuer: string }[];
+      }
     | { verified: false; reason: ReasonCode; detail: string }
     | undefined;
 };

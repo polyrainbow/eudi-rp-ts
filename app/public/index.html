@@ -72,7 +72,10 @@
 
   function render(result) {
     const rows = result.verified
-      ? { Format: result.format, Evidence: result.evidence, 'Credential type': result.credentialType, Issuer: result.issuer }
+      ? Object.assign({ Evidence: result.evidence }, ...result.credentials.map((c, i) => {
+          const n = result.credentials.length > 1 ? ` ${i + 1}` : '';
+          return { [`Format${n}`]: c.format, [`Credential type${n}`]: c.credentialType, [`Issuer${n}`]: c.issuer };
+        }))
       : { Reason: result.reason, Detail: result.detail };
     card.innerHTML = `
       <p class="verdict ${result.verified ? 'ok' : 'bad'}">

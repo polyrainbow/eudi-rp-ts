@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { verifyMdoc } from '../src/mdoc/verify.ts';
 import { evaluateAgeOver18SdJwt } from '../src/predicate/age.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
+import { ageOver18Query } from '../src/presets/age-over-18.ts';
 import { verifyAgeOver18SdJwtVc, verifySdJwtVc } from '../src/verify.ts';
 
 /**
@@ -113,6 +114,7 @@ describe('real credential over OID4VP', { skip: expired ? `credential expired ${
       accessCertificateChainPem: undefined,
       accessCertificatePrivateKeyPem: undefined,
       requestedVct: 'urn:eudi:pid:1',
+      query: ageOver18Query({ vct: 'urn:eudi:pid:1' }),
       requestTtlSeconds: 300,
     checkStatus: false,
     checkCertificateRevocation: false,
@@ -170,7 +172,10 @@ describe('real credential over OID4VP', { skip: expired ? `credential expired ${
       };
       assert.equal(outcome.status, 'verified', JSON.stringify(outcome));
       assert.equal(outcome.result['evidence'], 'birthdate');
-      assert.equal(outcome.result['credentialType'], 'urn:eudi:pid:1');
+      assert.deepEqual(
+        (outcome.result['credentials'] as { credentialType: string }[]).map((c) => c.credentialType),
+        ['urn:eudi:pid:1'],
+      );
     } finally {
       server.close();
     }

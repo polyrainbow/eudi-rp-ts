@@ -101,20 +101,28 @@ export type {
 export { buildSessionTranscript, jwkThumbprint } from './mdoc/session-transcript.ts';
 export type { HandoverParameters } from './mdoc/session-transcript.ts';
 
-// OID4VP: build a request, validate the response.
+// OID4VP: build a request for a query, validate the response against it.
 export { buildAuthorizationRequest } from './oid4vp/request.ts';
 export type { BuiltRequest } from './oid4vp/request.ts';
 export { verifyPresentationResponse } from './oid4vp/response.ts';
-export type { PresentationContext, PresentedFormat, VerifiedPresentation } from './oid4vp/response.ts';
+export type {
+  PredicateResult,
+  PresentationContext,
+  PresentationPredicate,
+  PresentedCredential,
+  PresentedCredentials,
+  PresentedFormat,
+  VerifiedPresentation,
+} from './oid4vp/response.ts';
+// The DCQL query, and the readers that turn one into checks on the answer.
+// A query is read back as well as sent, and what it asks for is what the
+// response is checked against — so the library builds none of its own.
 export {
-  ageOver18Query,
-  CREDENTIAL_QUERY_ID,
-  MDOC_CREDENTIAL_QUERY_ID,
-  PID_MDOC_NAMESPACE,
+  credentialQueryById,
+  mdocNamespaces,
+  queryFormats,
+  unsatisfiedRequirement,
 } from './oid4vp/query.ts';
-// The DCQL query itself. `ageOver18Query` is one builder of it, not the shape:
-// a query is read back as well as sent, and what it asks for is what the
-// response is checked against.
 export type {
   ClaimsPath,
   ClaimsQuery,
@@ -124,6 +132,19 @@ export type {
   MdocCredentialQuery,
   SdJwtVcCredentialQuery,
 } from './oid4vp/query.ts';
+
+// Presets: one question asked one way, in a form the library itself has no
+// opinion about. Everything here is composed from the exports above, so a
+// caller asking something else writes the same two pieces — a query, and a
+// predicate over the answer — without touching the verification path.
+export {
+  AGE_OVER_18_MDOC_QUERY_ID,
+  AGE_OVER_18_SD_JWT_QUERY_ID,
+  ageOver18Predicate,
+  ageOver18Query,
+} from './presets/age-over-18.ts';
+export type { AgeOver18QueryOptions } from './presets/age-over-18.ts';
+export { PID_MDOC_DOCTYPE, PID_MDOC_NAMESPACE, PID_VCT } from './presets/eudi-pid.ts';
 export { clientId, responseUri, verifierBaseUrl, x509Hash } from './oid4vp/identity.ts';
 export type { ClientIdPrefix, VerifierIdentity } from './oid4vp/identity.ts';
 
