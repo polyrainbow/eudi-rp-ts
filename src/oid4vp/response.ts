@@ -3,6 +3,7 @@ import type { JWK } from 'jose';
 import type { TtlCache } from '../fetching.ts';
 import type { VerifierIdentity } from './identity.ts';
 import { type Outcome, type Rejected, accept, reject } from '../result.ts';
+import { type CredentialFormat, type EventSink, noopSink, withoutVerdict } from '../events.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
 import { type AgeResult, type VerifiedCredential, verifyAgeOver18 } from '../verify.ts';
 import { createDecryptJwe, createVerifyJwt, generateRandom, hashCallback } from './callbacks.ts';
@@ -12,7 +13,7 @@ import { verifyDeviceResponse } from '../mdoc/device-response.ts';
 import { buildSessionTranscript, jwkThumbprint } from '../mdoc/session-transcript.ts';
 
 /** Which credential format actually answered. */
-export type PresentedFormat = 'dc+sd-jwt' | 'mso_mdoc';
+export type PresentedFormat = CredentialFormat;
 
 export type VerifiedPresentation = VerifiedCredential & AgeResult & { format: PresentedFormat };
 
@@ -33,6 +34,16 @@ export type PresentationContext = {
    * default; an interop workaround, not a policy, so it is named as one.
    */
   tolerateMalformedMdocValidity?: boolean;
+  /**
+   * Receives structured events for auditing and metrics. Carries no personal
+   * data by construction — see `src/events.ts`.
+   *
+   * Passed to whichever credential verifier answers, so the stream is the same
+   * either way. The envelope rejections this function makes itself — a wallet
+   * that declined, a response that would not parse — are emitted here with no
+   * format, because at that point no credential has been seen.
+   */
+  onEvent?: EventSink;
 };
 
 /**
@@ -53,6 +64,23 @@ export async function verifyPresentationResponse(
   context: PresentationContext,
   authorizationResponse: Record<string, unknown>,
 ): Promise<Outcome<VerifiedPresentation>> {
+  const emit = context.onEvent ?? noopSink;
+  const startedAt = Date.now();
+
+  /**
+   * Envelope-level rejections only. Once a credential verifier runs it owns the
+   * verdict, so nothing below that delegates goes through here.
+   */
+  const rejectWith = (outcome: Rejected): Rejected => {
+    emit({
+      type: 'verification.rejected',
+      format: undefined,
+      reason: outcome.reason,
+      durationMs: Date.now() - startedAt,
+    });
+    return outcome;
+  };
+
   const verifier = new Openid4vpVerifier({
     callbacks: {
       hash: hashCallback,
@@ -63,7 +91,7 @@ export async function verifyPresentationResponse(
   });
 
   const declined = await walletErrorResponse(context, authorizationResponse);
-  if (declined) return declined;
+  if (declined) return rejectWith(declined);
 
   let vpToken: unknown;
   try {
@@ -83,11 +111,11 @@ export async function verifyPresentationResponse(
 
     vpToken = (parsed.authorizationResponsePayload as Record<string, unknown>)['vp_token'];
   } catch (error) {
-    return reject('RESPONSE_INVALID', `OID4VP response rejected: ${errorMessage(error)}`);
+    return rejectWith(reject('RESPONSE_INVALID', `OID4VP response rejected: ${errorMessage(error)}`));
   }
 
   if (typeof vpToken !== 'object' || vpToken === null) {
-    return reject('RESPONSE_INVALID', 'vp_token is not a JSON object');
+    return rejectWith(reject('RESPONSE_INVALID', 'vp_token is not a JSON object'));
   }
   const token = vpToken as Record<string, unknown>;
 
@@ -97,18 +125,24 @@ export async function verifyPresentationResponse(
   const mdoc = onePresentation(token[MDOC_CREDENTIAL_QUERY_ID]);
 
   if (sdJwt.present && mdoc.present) {
-    return reject('RESPONSE_INVALID', 'vp_token answers both credential queries; expected one');
+    return rejectWith(reject('RESPONSE_INVALID', 'vp_token answers both credential queries; expected one'));
   }
   if (sdJwt.present) {
-    return sdJwt.value ? await verifySdJwt(context, sdJwt.value) : reject('RESPONSE_INVALID', sdJwt.problem);
+    return sdJwt.value
+      ? await verifySdJwt(context, sdJwt.value)
+      : rejectWith(reject('RESPONSE_INVALID', sdJwt.problem));
   }
   if (mdoc.present) {
-    return mdoc.value ? await verifyMdocPresentation(context, mdoc.value) : reject('RESPONSE_INVALID', mdoc.problem);
+    return mdoc.value
+      ? await verifyMdocPresentation(context, mdoc.value)
+      : rejectWith(reject('RESPONSE_INVALID', mdoc.problem));
   }
 
-  return reject(
-    'RESPONSE_INVALID',
-    `vp_token has no entry for "${CREDENTIAL_QUERY_ID}" or "${MDOC_CREDENTIAL_QUERY_ID}"`,
+  return rejectWith(
+    reject(
+      'RESPONSE_INVALID',
+      `vp_token has no entry for "${CREDENTIAL_QUERY_ID}" or "${MDOC_CREDENTIAL_QUERY_ID}"`,
+    ),
   );
 }
 
@@ -179,6 +213,9 @@ async function verifySdJwt(
     // narrower set than was advertised would reject a wallet for answering
     // exactly what it was asked for.
     ...(context.config.allowedAlgs ? { allowedAlgs: context.config.allowedAlgs } : {}),
+    // `verifyAgeOver18` owns the verdict, predicate included, so the sink goes
+    // straight through rather than being wrapped.
+    ...(context.onEvent ? { onEvent: context.onEvent } : {}),
     keyBinding: { nonce: context.nonce, audience },
   });
 
@@ -197,10 +234,28 @@ async function verifyMdocPresentation(
   context: PresentationContext,
   deviceResponse: string,
 ): Promise<Outcome<VerifiedPresentation>> {
+  const emit = context.onEvent ?? noopSink;
+  const startedAt = Date.now();
+  const rejectWith = <T>(outcome: Outcome<T>): Outcome<T> => {
+    if (!outcome.verified) {
+      emit({
+        type: 'verification.rejected',
+        format: 'mso_mdoc',
+        reason: outcome.reason,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+    return outcome;
+  };
+
   const transcript = sessionTranscriptFor(context);
-  if (!transcript.verified) return transcript;
+  if (!transcript.verified) return rejectWith(transcript);
 
   const result = await verifyDeviceResponse({
+    // The age predicate below can still reject what the device response
+    // established, so the verdict is this function's — the mirror of what
+    // `verifyAgeOver18` does on the SD-JWT VC side.
+    onEvent: withoutVerdict(emit),
     deviceResponse,
     anchors: context.anchors,
     sessionTranscript: transcript.value,
@@ -215,11 +270,19 @@ async function verifyMdocPresentation(
     ...(context.revocationCache ? { revocationCache: context.revocationCache } : {}),
     ...(context.config.allowedAlgs ? { allowedAlgs: context.config.allowedAlgs } : {}),
   });
-  if (!result.verified) return result;
+  if (!result.verified) return rejectWith(result);
 
   const elements = result.value.claims[PID_MDOC_NAMESPACE] ?? {};
   const age = evaluateAgeOver18Mdoc(elements, new Date());
-  if (!age.verified) return age;
+  if (!age.verified) return rejectWith(age);
+
+  emit({
+    type: 'verification.accepted',
+    format: 'mso_mdoc',
+    vct: result.value.docType,
+    evidence: age.value.evidence,
+    durationMs: Date.now() - startedAt,
+  });
 
   return accept({
     ...age.value,

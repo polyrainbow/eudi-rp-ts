@@ -4,7 +4,8 @@ import type { TtlCache } from '../fetching.ts';
 import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
 import { type PathValidationOptions, resolveIssuerCertificateChain } from '../trust/issuer-key.ts';
-import { checkChainRevocation, revocationRejection } from '../trust/revocation.ts';
+import { checkChainRevocation, revocationRejection, revocationVia } from '../trust/revocation.ts';
+import { type EventSink, noopSink } from '../events.ts';
 import { type StatusListReference, checkStatusList } from '../trust/status.ts';
 import { decode, decodeEmbedded, encodeTag24, entriesOf, get, toBytes, untag } from './cbor.ts';
 import { coseAlg, coseX5Chain, parseCoseSign1, verifyCoseSign1 } from './cose.ts';
@@ -74,6 +75,13 @@ export type MdocVerifyOptions = {
   revocationTimeoutMs?: number;
   /** Tolerance for clock differences with the issuer, in seconds. */
   clockSkewSeconds?: number;
+  /**
+   * Receives structured events for auditing and metrics. Carries no personal
+   * data by construction — see `src/events.ts`. The same stream the SD-JWT VC
+   * path emits: the format a wallet answers in must not decide whether a
+   * verification is auditable.
+   */
+  onEvent?: EventSink;
 };
 
 export type VerifiedMdoc = {
@@ -89,6 +97,21 @@ export type VerifiedMdoc = {
 export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<VerifiedMdoc>> {
   const now = options.now ?? new Date();
   const allowedAlgs = options.allowedAlgs ?? DEFAULT_ALLOWED_ALGS;
+  const emit = options.onEvent ?? noopSink;
+  const startedAt = Date.now();
+
+  /** Every rejecting exit from this function goes through this. */
+  const rejectWith = <T>(outcome: Outcome<T>): Outcome<T> => {
+    if (!outcome.verified) {
+      emit({
+        type: 'verification.rejected',
+        format: 'mso_mdoc',
+        reason: outcome.reason,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+    return outcome;
+  };
 
   let issuerSigned: unknown;
   try {
@@ -98,76 +121,91 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
         : options.issuerSigned;
     issuerSigned = decode(bytes);
   } catch (error) {
-    return reject('CREDENTIAL_MALFORMED', `Cannot decode IssuerSigned CBOR: ${String(error)}`);
+    return rejectWith(reject('CREDENTIAL_MALFORMED', `Cannot decode IssuerSigned CBOR: ${String(error)}`));
   }
 
   let sign1;
   try {
     sign1 = parseCoseSign1(get(issuerSigned, 'issuerAuth'));
   } catch (error) {
-    return reject('CREDENTIAL_MALFORMED', `issuerAuth is not a COSE_Sign1: ${String(error)}`);
+    return rejectWith(reject('CREDENTIAL_MALFORMED', `issuerAuth is not a COSE_Sign1: ${String(error)}`));
   }
 
   const alg = coseAlg(sign1);
   if (!alg || !allowedAlgs.includes(alg)) {
-    return reject('UNSUPPORTED_ALGORITHM', `COSE alg is not in the allowed set (${allowedAlgs.join(', ')})`);
+    return rejectWith(
+      reject('UNSUPPORTED_ALGORITHM', `COSE alg is not in the allowed set (${allowedAlgs.join(', ')})`),
+    );
   }
+
+  // The doc type is inside the signed MSO, which is unreadable until the
+  // signature below has verified — so unlike the SD-JWT VC path, this cannot
+  // name the credential type yet. It is on `verification.accepted` instead.
+  emit({ type: 'verification.started', format: 'mso_mdoc', vct: undefined });
 
   // The chain lives in the COSE header rather than a JOSE one, but from here
   // trust is established exactly as it is for SD-JWT VC.
   const chainDer = coseX5Chain(sign1);
   if (chainDer.length === 0) {
-    return reject('ISSUER_KEY_UNRESOLVABLE', 'issuerAuth carries no x5chain header');
+    return rejectWith(reject('ISSUER_KEY_UNRESOLVABLE', 'issuerAuth carries no x5chain header'));
   }
   let chain: X509Certificate[];
   try {
     chain = chainDer.map((der) => new X509Certificate(Buffer.from(der)));
   } catch (error) {
-    return reject('ISSUER_KEY_UNRESOLVABLE', `Cannot parse x5chain certificate: ${String(error)}`);
+    return rejectWith(reject('ISSUER_KEY_UNRESOLVABLE', `Cannot parse x5chain certificate: ${String(error)}`));
   }
 
   const trusted = resolveIssuerCertificateChain(chain, options.anchors, now, options.pathValidation ?? {});
-  if (!trusted.verified) return trusted;
+  if (!trusted.verified) return rejectWith(trusted);
 
   const mismatch = keyUnusableFor(trusted.value.leaf.publicKey, alg);
   if (mismatch) {
-    return reject('UNSUPPORTED_ALGORITHM', `Document signer key does not match issuerAuth: ${mismatch}`);
+    return rejectWith(
+      reject('UNSUPPORTED_ALGORITHM', `Document signer key does not match issuerAuth: ${mismatch}`),
+    );
   }
+  emit({
+    type: 'issuer.resolved',
+    format: 'mso_mdoc',
+    subject: trusted.value.leaf.subject,
+    chainLength: trusted.value.chain.length,
+  });
 
   if (!verifyCoseSign1(sign1, trusted.value.leaf.publicKey, alg)) {
-    return reject('ISSUER_SIGNATURE_INVALID', 'issuerAuth signature does not verify');
+    return rejectWith(reject('ISSUER_SIGNATURE_INVALID', 'issuerAuth signature does not verify'));
   }
 
   // MobileSecurityObjectBytes is `#6.24(bstr .cbor MobileSecurityObject)`.
   if (sign1.payload === null) {
-    return reject('CREDENTIAL_MALFORMED', 'issuerAuth has a detached payload');
+    return rejectWith(reject('CREDENTIAL_MALFORMED', 'issuerAuth has a detached payload'));
   }
   let mso: unknown;
   try {
     mso = decodeEmbedded(untag(decode(sign1.payload)));
   } catch (error) {
-    return reject('CREDENTIAL_MALFORMED', `Cannot decode MobileSecurityObject: ${String(error)}`);
+    return rejectWith(reject('CREDENTIAL_MALFORMED', `Cannot decode MobileSecurityObject: ${String(error)}`));
   }
 
   const docType = get(mso, 'docType');
   if (typeof docType !== 'string') {
-    return reject('CREDENTIAL_MALFORMED', 'MobileSecurityObject has no docType');
+    return rejectWith(reject('CREDENTIAL_MALFORMED', 'MobileSecurityObject has no docType'));
   }
   if (options.expectedDocType && docType !== options.expectedDocType) {
-    return reject('UNEXPECTED_VCT', `Expected docType ${options.expectedDocType}, got ${docType}`);
+    return rejectWith(reject('UNEXPECTED_VCT', `Expected docType ${options.expectedDocType}, got ${docType}`));
   }
 
   const validity = readValidity(get(mso, 'validityInfo'));
   if (!validity.ok) {
     if (!options.tolerateMalformedValidityDates) {
-      return reject('CREDENTIAL_MALFORMED', validity.detail);
+      return rejectWith(reject('CREDENTIAL_MALFORMED', validity.detail));
     }
   }
   if (validity.validFrom && now < validity.validFrom) {
-    return reject('CREDENTIAL_NOT_YET_VALID', `Valid from ${validity.validFrom.toISOString()}`);
+    return rejectWith(reject('CREDENTIAL_NOT_YET_VALID', `Valid from ${validity.validFrom.toISOString()}`));
   }
   if (validity.validUntil && now > validity.validUntil) {
-    return reject('CREDENTIAL_EXPIRED', `Expired at ${validity.validUntil.toISOString()}`);
+    return rejectWith(reject('CREDENTIAL_EXPIRED', `Expired at ${validity.validUntil.toISOString()}`));
   }
 
   const digestAlgorithm = get(mso, 'digestAlgorithm');
@@ -175,18 +213,20 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
     String(digestAlgorithm)
   ];
   if (!nodeDigest) {
-    return reject('UNSUPPORTED_ALGORITHM', `Unsupported digestAlgorithm ${String(digestAlgorithm)}`);
+    return rejectWith(
+      reject('UNSUPPORTED_ALGORITHM', `Unsupported digestAlgorithm ${String(digestAlgorithm)}`),
+    );
   }
 
   const claims = checkDigests(issuerSigned, get(mso, 'valueDigests'), nodeDigest);
-  if (!claims.verified) return claims;
+  if (!claims.verified) return rejectWith(claims);
 
   // Last, and only once everything local has passed: it is the one step that
   // reaches the network, and a credential that fails any check above does not
   // need a status lookup to be rejected.
   if (options.checkStatus ?? true) {
     const reference = readStatusReference(get(mso, 'status'));
-    if (!reference.verified) return reference;
+    if (!reference.verified) return rejectWith(reference);
 
     if (reference.value) {
       const outcome = await checkStatusList(reference.value, {
@@ -200,13 +240,22 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
         // policy that reaches it is the caller's list, not the COSE subset.
         allowedAlgs,
       });
+      // Emitted before the rejections below, so a revoked credential is
+      // recorded as having been checked and not only as having been refused.
+      emit({
+        type: 'status.checked',
+        outcome: outcome.kind === 'valid' ? 'valid' : outcome.kind === 'revoked' ? 'revoked' : 'unavailable',
+        cached: options.statusCache !== undefined,
+      });
       if (outcome.kind === 'revoked') {
-        return reject('CREDENTIAL_REVOKED', `The issuer has revoked this credential (status ${outcome.status})`);
+        return rejectWith(
+          reject('CREDENTIAL_REVOKED', `The issuer has revoked this credential (status ${outcome.status})`),
+        );
       }
       // Fails closed, as on the SD-JWT VC path: a status list we could not
       // check is not a status list that said valid.
       if (outcome.kind === 'unavailable') {
-        return reject('STATUS_UNAVAILABLE', outcome.detail);
+        return rejectWith(reject('STATUS_UNAVAILABLE', outcome.detail));
       }
     }
   }
@@ -221,9 +270,12 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
       ...(options.revocationTimeoutMs ? { timeoutMs: options.revocationTimeoutMs } : {}),
       ...(options.clockSkewSeconds ? { clockSkewSeconds: options.clockSkewSeconds } : {}),
     });
+    emit({ type: 'issuer.revocation.checked', outcome: revocation.kind, via: revocationVia(revocation) });
     const rejected = revocationRejection(revocation);
-    if (rejected) return rejected;
+    if (rejected) return rejectWith(rejected);
   }
+
+  emit({ type: 'verification.accepted', format: 'mso_mdoc', vct: docType, durationMs: Date.now() - startedAt });
 
   return accept({
     docType,

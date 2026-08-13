@@ -107,8 +107,11 @@ export { clientId, responseUri, verifierBaseUrl, x509Hash } from './oid4vp/ident
 export type { ClientIdPrefix, VerifierIdentity } from './oid4vp/identity.ts';
 
 // Structured events for auditing and metrics. The library never logs.
-export { noopSink } from './events.ts';
-export type { EventSink, VerificationEvent } from './events.ts';
+// `withoutVerdict` is exported because a caller composing its own verifier on
+// top of these needs the same discipline the library applies internally: let
+// the intermediate events through, withhold the verdict until it is one.
+export { noopSink, withoutVerdict } from './events.ts';
+export type { CredentialFormat, EventSink, VerificationEvent } from './events.ts';
 
 // Primitives, exported because a caller supplying their own callbacks needs them.
 export {

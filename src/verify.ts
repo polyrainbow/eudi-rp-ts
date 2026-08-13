@@ -20,7 +20,7 @@ import { type PathValidationOptions, resolveIssuerKeyFromX5c } from './trust/iss
 import { createStatusChecker } from './trust/status.ts';
 import { checkChainRevocation, revocationRejection, revocationVia } from './trust/revocation.ts';
 import type { TtlCache } from './fetching.ts';
-import { type EventSink, noopSink } from './events.ts';
+import { type EventSink, noopSink, withoutVerdict } from './events.ts';
 
 /**
  * SD-JWT VC media types accepted in the `typ` header.
@@ -119,7 +119,12 @@ export async function verifyCredential(
   /** Every exit from this function goes through one of these two. */
   const rejectWith = (outcome: Outcome<never>) => {
     if (!outcome.verified) {
-      emit({ type: 'verification.rejected', reason: outcome.reason, durationMs: Date.now() - startedAt });
+      emit({
+        type: 'verification.rejected',
+        format: 'dc+sd-jwt',
+        reason: outcome.reason,
+        durationMs: Date.now() - startedAt,
+      });
     }
     return outcome;
   };
@@ -196,7 +201,11 @@ export async function verifyCredential(
     }
   }
 
-  emit({ type: 'verification.started', vct: typeof payload['vct'] === 'string' ? payload['vct'] : undefined });
+  emit({
+    type: 'verification.started',
+    format: 'dc+sd-jwt',
+    vct: typeof payload['vct'] === 'string' ? payload['vct'] : undefined,
+  });
 
   const issuer = resolveIssuerKeyFromX5c(issuerJwt, options.anchors, now, options.pathValidation ?? {});
   if (!issuer.verified) return rejectWith(issuer);
@@ -210,6 +219,7 @@ export async function verifyCredential(
   }
   emit({
     type: 'issuer.resolved',
+    format: 'dc+sd-jwt',
     subject: issuer.value.leaf.subject,
     chainLength: issuer.value.chain.length,
   });
@@ -331,7 +341,7 @@ export async function verifyCredential(
     if (rejected) return rejectWith(rejected);
   }
 
-  emit({ type: 'verification.accepted', vct, durationMs: Date.now() - startedAt });
+  emit({ type: 'verification.accepted', format: 'dc+sd-jwt', vct, durationMs: Date.now() - startedAt });
 
   return accept({
     claims,
@@ -341,15 +351,49 @@ export async function verifyCredential(
   });
 }
 
-/** Verify the credential and evaluate the age-over-18 predicate in one step. */
+/**
+ * Verify the credential and evaluate the age-over-18 predicate in one step.
+ *
+ * The verdict is this function's rather than `verifyCredential`'s: a credential
+ * can verify perfectly and still fail the predicate, and an audit trail
+ * recording `verification.accepted` for a presentation the caller was told to
+ * reject would be wrong about the only thing it exists to record.
+ *
+ * It is also where `evidence` gets onto the event — which of the two ways the
+ * predicate was satisfied. That distinction is the privacy one: the boolean
+ * discloses nothing else, the birthdate discloses a date of birth, and a
+ * relying party auditing what it actually learned needs to see which.
+ */
 export async function verifyAgeOver18(
   options: VerifyCredentialOptions,
 ): Promise<Outcome<VerifiedCredential & AgeResult>> {
-  const credential = await verifyCredential(options);
-  if (!credential.verified) return credential;
+  const emit = options.onEvent ?? noopSink;
+  const startedAt = Date.now();
+  const rejectWith = <T>(outcome: Outcome<T>): Outcome<T> => {
+    if (!outcome.verified) {
+      emit({
+        type: 'verification.rejected',
+        format: 'dc+sd-jwt',
+        reason: outcome.reason,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+    return outcome;
+  };
+
+  const credential = await verifyCredential({ ...options, onEvent: withoutVerdict(emit) });
+  if (!credential.verified) return rejectWith(credential);
 
   const age = evaluateAgeOver18(credential.value.claims, options.now ?? new Date());
-  if (!age.verified) return age;
+  if (!age.verified) return rejectWith(age);
+
+  emit({
+    type: 'verification.accepted',
+    format: 'dc+sd-jwt',
+    vct: credential.value.vct,
+    evidence: age.value.evidence,
+    durationMs: Date.now() - startedAt,
+  });
 
   return accept({ ...credential.value, ...age.value });
 }

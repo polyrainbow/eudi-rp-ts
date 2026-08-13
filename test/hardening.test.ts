@@ -4,9 +4,15 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { VerificationEvent } from '../src/events.ts';
+import { verifyDeviceResponse } from '../src/mdoc/device-response.ts';
+import { buildSessionTranscript } from '../src/mdoc/session-transcript.ts';
+import { verifyMdoc } from '../src/mdoc/verify.ts';
+import { verifyPresentationResponse } from '../src/oid4vp/response.ts';
+import { PID_MDOC_NAMESPACE } from '../src/oid4vp/query.ts';
 import { TrustAnchors } from '../src/trust/anchors.ts';
 import { resolveIssuerKeyFromX5c } from '../src/trust/issuer-key.ts';
-import { verifyCredential } from '../src/verify.ts';
+import { verifyAgeOver18, verifyCredential } from '../src/verify.ts';
+import { buildDeviceResponse } from './mdoc-wallet.ts';
 
 const dir = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const fixtures = JSON.parse(readFileSync(`${dir}credentials.json`, 'utf8'));
@@ -22,6 +28,58 @@ const base = {
   checkCertificateRevocation: false,
   now: NOW,
 };
+
+// The mdoc half of the event contract, against the same real credential
+// test/mdoc.test.ts uses — offline, with both revocation paths off.
+const real = fileURLToPath(new URL('./fixtures/real/', import.meta.url));
+const issuerSigned = readFileSync(`${real}eudiw-pid-mdoc.txt`, 'utf8').trim();
+const devicePrivateJwk = JSON.parse(readFileSync(`${real}mdoc-device-private-jwk.json`, 'utf8'));
+const mdocAnchors = TrustAnchors.fromPem(
+  readFileSync(fileURLToPath(new URL('../anchors/eudiw-pid-issuer-ca.pem', import.meta.url)), 'utf8'),
+);
+
+/** Inside the credential's window (issued 2026-08-11, expires 2026-11-09). */
+const MDOC_NOW = new Date('2026-09-01T00:00:00Z');
+const MDOC_CLIENT_ID = 'redirect_uri:https://verifier.test/oid4vp/response/abc';
+const MDOC_RESPONSE_URI = 'https://verifier.test/oid4vp/response/abc';
+const MDOC_NONCE = 'n-0S6_WzA2Mj';
+
+const mdocBase = {
+  issuerSigned,
+  anchors: mdocAnchors,
+  expectedDocType: PID_MDOC_NAMESPACE,
+  // The reference issuer emits a malformed validUntil; see test/mdoc.test.ts.
+  tolerateMalformedValidityDates: true,
+  checkStatus: false,
+  checkCertificateRevocation: false,
+  now: MDOC_NOW,
+};
+
+const mdocIdentity = {
+  baseUrl: 'https://verifier.test',
+  walletScheme: 'eudi-openid4vp://',
+  clientIdPrefix: 'redirect_uri' as const,
+  clientDnsName: undefined,
+  accessCertificateChainPem: undefined,
+  accessCertificatePrivateKeyPem: undefined,
+  requestedVct: 'urn:eudi:pid:1',
+  requestTtlSeconds: 300,
+  checkStatus: false,
+  checkCertificateRevocation: false,
+};
+
+const transcriptFor = (clientId: string) =>
+  buildSessionTranscript({ clientId, nonce: MDOC_NONCE, responseUri: MDOC_RESPONSE_URI });
+
+const deviceResponseFor = (clientId: string) =>
+  Buffer.from(
+    buildDeviceResponse({
+      issuerSigned,
+      devicePrivateJwk,
+      sessionTranscript: transcriptFor(clientId),
+      docType: PID_MDOC_NAMESPACE,
+    }),
+  ).toString('base64url');
 
 describe('reason codes are derived from state, not error text', () => {
   it('reports a structural defect as malformed, not as a bad signature', async () => {
@@ -145,5 +203,152 @@ describe('verification events', () => {
     for (const secret of ['Mustermann', 'Erika', '1990-06-12', 'age_equal_or_over']) {
       assert.ok(!serialised.includes(secret), `event stream leaked ${secret}`);
     }
+  });
+});
+
+describe('the audit trail does not depend on the credential format', () => {
+  // The format a wallet happens to answer in decides nothing about whether a
+  // verification is auditable, on the same reasoning that keeps it from
+  // deciding whether the credential's status is checked. Before this, an mdoc
+  // presentation emitted nothing at all.
+
+  const record = () => {
+    const events: VerificationEvent[] = [];
+    return { events, onEvent: (e: VerificationEvent) => events.push(e) };
+  };
+  const types = (events: VerificationEvent[]) => events.map((e) => e.type);
+
+  it('emits the same sequence for mdoc as for SD-JWT VC', async () => {
+    const sd = record();
+    await verifyCredential({ ...base, onEvent: sd.onEvent });
+
+    const md = record();
+    const result = await verifyMdoc({ ...mdocBase, onEvent: md.onEvent });
+
+    assert.equal(result.verified, true, JSON.stringify(result));
+    assert.deepEqual(types(md.events), ['verification.started', 'issuer.resolved', 'verification.accepted']);
+    assert.deepEqual(types(md.events), types(sd.events));
+  });
+
+  it('names the format, so a mixed stream stays readable', async () => {
+    const sd = record();
+    await verifyCredential({ ...base, onEvent: sd.onEvent });
+    const md = record();
+    await verifyMdoc({ ...mdocBase, onEvent: md.onEvent });
+
+    assert.deepEqual(
+      sd.events.map((e) => ('format' in e ? e.format : null)),
+      ['dc+sd-jwt', 'dc+sd-jwt', 'dc+sd-jwt'],
+    );
+    assert.deepEqual(
+      md.events.map((e) => ('format' in e ? e.format : null)),
+      ['mso_mdoc', 'mso_mdoc', 'mso_mdoc'],
+    );
+  });
+
+  it('reports an mdoc rejection with its reason', async () => {
+    const { events, onEvent } = record();
+    await verifyMdoc({ ...mdocBase, expectedDocType: 'org.iso.18013.5.1.mDL', onEvent });
+
+    const rejected = events.find((e) => e.type === 'verification.rejected');
+    assert.ok(rejected, 'a rejection must be observable');
+    assert.equal((rejected as { reason: string }).reason, 'UNEXPECTED_VCT');
+    assert.equal((rejected as { format: string }).format, 'mso_mdoc');
+  });
+
+  it('carries no personal data on the mdoc path either', async () => {
+    const { events, onEvent } = record();
+    await verifyMdoc({ ...mdocBase, onEvent });
+
+    const serialised = JSON.stringify(events);
+    for (const secret of ['Tester', 'Porto', '1990-06-12', 'portrait']) {
+      assert.ok(!serialised.includes(secret), `event stream leaked ${secret}`);
+    }
+  });
+});
+
+describe('exactly one verdict, and the outermost verifier owns it', () => {
+  // A credential can verify perfectly and still be rejected afterwards — by the
+  // age predicate, or by mdoc device authentication. Recording
+  // verification.accepted for a presentation the caller was told to reject
+  // would make the audit trail wrong about the one thing it exists to record.
+
+  const record = () => {
+    const events: VerificationEvent[] = [];
+    return { events, onEvent: (e: VerificationEvent) => events.push(e) };
+  };
+  const verdicts = (events: VerificationEvent[]) =>
+    events.filter((e) => e.type === 'verification.accepted' || e.type === 'verification.rejected');
+
+  it('records a rejection, not an acceptance, when the predicate fails', async () => {
+    const { events, onEvent } = record();
+    const result = await verifyAgeOver18({
+      ...base,
+      credential: fixtures.credentials.under18 as string,
+      onEvent,
+    });
+
+    assert.equal(result.verified, false);
+    assert.equal(result.reason, 'PREDICATE_NOT_SATISFIED');
+    // The credential itself verified, so issuer resolution is still on the
+    // stream — it is only the verdict that belongs to the outer call.
+    assert.ok(events.some((e) => e.type === 'issuer.resolved'));
+    assert.deepEqual(verdicts(events).map((e) => e.type), ['verification.rejected']);
+  });
+
+  it('records a rejection when mdoc device authentication fails', async () => {
+    // The issuer's credential verifies; the device signature was made for a
+    // different verifier, which verifyMdoc has no way of knowing.
+    const { events, onEvent } = record();
+    const result = await verifyDeviceResponse({
+      deviceResponse: deviceResponseFor('redirect_uri:https://attacker.test/collect'),
+      anchors: mdocAnchors,
+      sessionTranscript: transcriptFor(MDOC_CLIENT_ID),
+      tolerateMalformedValidityDates: true,
+      checkStatus: false,
+      checkCertificateRevocation: false,
+      now: MDOC_NOW,
+      onEvent,
+    });
+
+    assert.equal(result.verified, false);
+    assert.equal(result.reason, 'KEY_BINDING_INVALID');
+    assert.ok(events.some((e) => e.type === 'issuer.resolved'));
+    assert.deepEqual(verdicts(events).map((e) => e.type), ['verification.rejected']);
+  });
+
+  it('puts the predicate evidence on the acceptance', async () => {
+    // Which of the two ways the predicate was satisfied is the privacy
+    // question: the boolean discloses nothing else, the birthdate discloses a
+    // date of birth. A relying party auditing what it learned needs to see it.
+    const { events, onEvent } = record();
+    const result = await verifyAgeOver18({ ...base, onEvent });
+
+    assert.equal(result.verified, true);
+    const accepted = events.find((e) => e.type === 'verification.accepted');
+    assert.equal((accepted as { evidence?: string }).evidence, 'age_equal_or_over.18');
+    assert.deepEqual(verdicts(events).map((e) => e.type), ['verification.accepted']);
+  });
+
+  it('emits an envelope rejection with no format at all', async () => {
+    // The wallet declined, so no credential was ever seen. Claiming a format
+    // here would be inventing one.
+    const { events, onEvent } = record();
+    const result = await verifyPresentationResponse(
+      {
+        config: mdocIdentity,
+        anchors: mdocAnchors,
+        nonce: MDOC_NONCE,
+        requestPayload: { client_id: MDOC_CLIENT_ID, response_uri: MDOC_RESPONSE_URI },
+        decryptionJwk: undefined,
+        onEvent,
+      },
+      { error: 'access_denied', error_description: 'user refused' },
+    );
+
+    assert.equal(result.verified, false);
+    assert.equal(result.reason, 'WALLET_ERROR');
+    assert.deepEqual(verdicts(events).map((e) => e.type), ['verification.rejected']);
+    assert.equal((verdicts(events)[0] as { format: undefined }).format, undefined);
   });
 });

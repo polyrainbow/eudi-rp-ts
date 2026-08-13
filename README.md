@@ -752,6 +752,31 @@ the library calls first. A test pins the resulting code.
 identifiers, no credential bytes. A test asserts it. An audit trail that quietly
 accumulates dates of birth is worse than none.
 
+Two further rules make the trail worth keeping.
+
+**Both credential formats emit the same stream.** `verification.started`,
+`issuer.resolved`, `status.checked`, `issuer.revocation.checked` and a verdict,
+whether the wallet answered in `dc+sd-jwt` or `mso_mdoc` — the same reasoning
+that stops the format deciding whether the credential's status is checked. Each
+event names its `format`, because the two prove holder binding by different
+means and a mixed stream would otherwise be ambiguous. The one asymmetry is that
+`verification.started` cannot name the credential type for mdoc: the doc type
+lives inside the signed Mobile Security Object and is unreadable until the
+issuer signature has verified. It appears on `verification.accepted` instead.
+
+**Exactly one `verification.accepted` or `verification.rejected` per
+verification, and the outermost verifier owns it.** A credential can verify
+perfectly and still be rejected afterwards — by the age predicate, or by mdoc
+device authentication, neither of which the inner verifier knows about. So
+`verifyAgeOver18`, `verifyDeviceResponse` and `verifyPresentationResponse`
+withhold the verdict until it is one, letting every intermediate event through
+in the meantime. Without that the trail records an acceptance for a presentation
+the caller was told to reject, which is the single claim it exists to make.
+`verification.accepted` also carries `evidence` — which of the two ways the age
+predicate was satisfied, and therefore whether the holder disclosed a boolean or
+a full date of birth. An envelope rejection, where the wallet declined before
+any credential was seen, has no `format` at all rather than a guessed one.
+
 ## Three things the libraries do not do
 
 All handled in `src/`; all easy to get wrong by assuming otherwise.

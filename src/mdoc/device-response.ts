@@ -1,4 +1,5 @@
 import { type Outcome, accept, reject } from '../result.ts';
+import { type EventSink, noopSink, withoutVerdict } from '../events.ts';
 import { DEFAULT_ALLOWED_ALGS, type JwsAlg } from '../crypto.ts';
 import type { TtlCache } from '../fetching.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
@@ -43,6 +44,16 @@ export type DeviceResponseOptions = {
   revocationCache?: TtlCache<Uint8Array>;
   revocationTimeoutMs?: number;
   clockSkewSeconds?: number;
+  /**
+   * Receives structured events for auditing and metrics. Carries no personal
+   * data by construction — see `src/events.ts`.
+   *
+   * The verdict is this function's, not `verifyMdoc`'s: device authentication
+   * runs after the issuer's credential has verified and can still reject it, so
+   * an inner `verification.accepted` would record an acceptance the caller was
+   * never given.
+   */
+  onEvent?: EventSink;
 };
 
 export type VerifiedDeviceResponse = VerifiedMdoc & {
@@ -53,6 +64,22 @@ export type VerifiedDeviceResponse = VerifiedMdoc & {
 export async function verifyDeviceResponse(
   options: DeviceResponseOptions,
 ): Promise<Outcome<VerifiedDeviceResponse>> {
+  const emit = options.onEvent ?? noopSink;
+  const startedAt = Date.now();
+
+  /** Every rejecting exit from this function goes through this. */
+  const rejectWith = <T>(outcome: Outcome<T>): Outcome<T> => {
+    if (!outcome.verified) {
+      emit({
+        type: 'verification.rejected',
+        format: 'mso_mdoc',
+        reason: outcome.reason,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+    return outcome;
+  };
+
   let response: unknown;
   try {
     const bytes =
@@ -61,36 +88,39 @@ export async function verifyDeviceResponse(
         : options.deviceResponse;
     response = decode(bytes);
   } catch (error) {
-    return reject('CREDENTIAL_MALFORMED', `Cannot decode DeviceResponse: ${String(error)}`);
+    return rejectWith(reject('CREDENTIAL_MALFORMED', `Cannot decode DeviceResponse: ${String(error)}`));
   }
 
   // A non-zero status is the wallet reporting a failure of its own.
   const status = get(response, 'status');
   if (typeof status === 'number' && status !== 0) {
-    return reject('RESPONSE_INVALID', `Wallet returned DeviceResponse status ${status}`);
+    return rejectWith(reject('RESPONSE_INVALID', `Wallet returned DeviceResponse status ${status}`));
   }
 
   const documents = get(response, 'documents');
   if (!Array.isArray(documents) || documents.length === 0) {
-    return reject('RESPONSE_INVALID', 'DeviceResponse contains no documents');
+    return rejectWith(reject('RESPONSE_INVALID', 'DeviceResponse contains no documents'));
   }
   if (documents.length > 1) {
     // Our query asks for one credential; more than one is a protocol error.
-    return reject('RESPONSE_INVALID', `Expected one document, got ${documents.length}`);
+    return rejectWith(reject('RESPONSE_INVALID', `Expected one document, got ${documents.length}`));
   }
 
   const document = documents[0];
   const docType = get(document, 'docType');
   if (typeof docType !== 'string') {
-    return reject('CREDENTIAL_MALFORMED', 'Document has no docType');
+    return rejectWith(reject('CREDENTIAL_MALFORMED', 'Document has no docType'));
   }
 
   const issuerSigned = get(document, 'issuerSigned');
   if (issuerSigned === undefined) {
-    return reject('CREDENTIAL_MALFORMED', 'Document has no issuerSigned');
+    return rejectWith(reject('CREDENTIAL_MALFORMED', 'Document has no issuerSigned'));
   }
 
   const verified = await verifyMdoc({
+    // Everything `verifyMdoc` observes is worth recording; only its verdict is
+    // premature, because device authentication has not run yet.
+    onEvent: withoutVerdict(emit),
     issuerSigned: encode(issuerSigned),
     anchors: options.anchors,
     ...(options.expectedDocType ? { expectedDocType: options.expectedDocType } : {}),
@@ -112,16 +142,25 @@ export async function verifyDeviceResponse(
     ...(options.revocationTimeoutMs ? { revocationTimeoutMs: options.revocationTimeoutMs } : {}),
     ...(options.clockSkewSeconds ? { clockSkewSeconds: options.clockSkewSeconds } : {}),
   });
-  if (!verified.verified) return verified;
+  if (!verified.verified) return rejectWith(verified);
 
   // The document's own docType must match the one the issuer signed, or a
   // wallet could present a PID as though it were something else.
   if (docType !== verified.value.docType) {
-    return reject('CREDENTIAL_MALFORMED', `docType ${docType} does not match the signed ${verified.value.docType}`);
+    return rejectWith(
+      reject('CREDENTIAL_MALFORMED', `docType ${docType} does not match the signed ${verified.value.docType}`),
+    );
   }
 
   const deviceAuth = await verifyDeviceAuth(document, verified.value, options);
-  if (!deviceAuth.verified) return deviceAuth;
+  if (!deviceAuth.verified) return rejectWith(deviceAuth);
+
+  emit({
+    type: 'verification.accepted',
+    format: 'mso_mdoc',
+    vct: verified.value.docType,
+    durationMs: Date.now() - startedAt,
+  });
 
   return accept({ ...verified.value, deviceSignedClaims: deviceAuth.value });
 }

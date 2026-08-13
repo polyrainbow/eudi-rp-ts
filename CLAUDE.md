@@ -124,6 +124,19 @@ not valid RFC 3339 (upstream issue #177).
 values, no subject identifiers, no credential bytes. `test/hardening.test.ts` asserts it. Keep new
 event fields non-identifying.
 
+Two invariants there, both pinned by tests in the same file:
+
+- **The stream does not depend on the credential format.** SD-JWT VC and mdoc emit the same
+  sequence, each event naming its `format`. Same rule as the status check in `response.ts`: what a
+  wallet happens to answer in must not decide what the verifier can audit. A new emit point on one
+  path needs its counterpart on the other.
+- **Exactly one verdict per verification, owned by the outermost verifier.** `verifyCredential` and
+  `verifyMdoc` are entry points *and* steps inside `verifyAgeOver18`, `verifyDeviceResponse` and
+  `verifyPresentationResponse`, each of which can still reject what the inner one accepted. The
+  outer ones therefore wrap the sink in `withoutVerdict` and emit the terminal event themselves. Any
+  new wrapper around a verifier has to do the same, or the trail records an acceptance the caller
+  never got.
+
 ## Conventions
 
 - Imports use explicit `.ts` extensions (`allowImportingTsExtensions`; the build rewrites them).
