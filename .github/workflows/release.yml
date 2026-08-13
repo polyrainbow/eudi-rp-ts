@@ -10,12 +10,63 @@ on:
 
 permissions:
   contents: read
-  id-token: write # required for --provenance
 
 jobs:
-  publish:
+  # The same matrix as ci.yml, and for a reason paid for once: 0.3.0 published
+  # from a commit whose CI was red. The failure was on the 22.18.0 leg only, this
+  # workflow tested 24.x alone, so the gate that was meant to re-run "the same
+  # gates as CI" agreed with the half of CI that was passing. A release must be
+  # able to fail for anything a branch build can fail for, which means testing
+  # every version `engines` promises — 22.18.0 is a promise, not a preference.
+  verify:
+    name: node ${{ matrix.node }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.18.0', '24.x']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  # Separate and dependency-free so a mistyped tag fails in seconds, alongside
+  # the matrix rather than behind it. The tag is the release record: if it
+  # disagrees with package.json one of the two is wrong, and finding out after
+  # publishing is expensive, because npm versions are immutable.
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+      - name: Tag matches package.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(npm pkg get version | tr -d '"')"
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag ${GITHUB_REF_NAME} implies version ${tag}, package.json says ${pkg}" >&2
+            exit 1
+          fi
+
+  publish:
+    needs: [verify, tag]
+    runs-on: ubuntu-latest
+    # Both stay exactly as they are: npm's trusted publisher is configured
+    # against this repository, this workflow's *filename*, and this environment.
+    # Renaming the file or the environment refuses the publish. Splitting the
+    # jobs does not — the claim carries no job name — but the next tag is what
+    # proves that, so it is worth knowing where to look if one is ever refused.
     environment: npm
+    permissions:
+      contents: read
+      id-token: write # required for --provenance; needed by this job alone
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,30 +77,14 @@ jobs:
 
       - run: npm ci
 
-      # The tag is the release record. If it disagrees with package.json, one of
-      # the two is wrong, and finding out after publishing is expensive: npm
-      # versions are immutable.
-      - name: Tag matches package.json version
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          pkg="$(npm pkg get version | tr -d '"')"
-          if [ "$tag" != "$pkg" ]; then
-            echo "tag ${GITHUB_REF_NAME} implies version ${tag}, package.json says ${pkg}" >&2
-            exit 1
-          fi
-
-      # Same gates as CI, re-run here rather than trusted from the branch build:
-      # a tag can point at a commit CI never saw.
-      - run: npm run typecheck
-      - run: npm test
+      # Version-independent, so once is enough — the same split ci.yml makes
+      # between its matrix and its `package` job.
       - run: npm run build
       - run: npm run check:package
 
       # No token. npm trusted publishing exchanges this job's OIDC identity for a
       # short-lived credential, so there is no long-lived secret to store, rotate
-      # or leak. npm checks the claims against the publisher configured on the
-      # package: this repository, this workflow filename, and the `npm`
-      # environment declared above — rename either and the publish is refused.
+      # or leak.
       #
       # `prepack` builds again; that is npm's contract and cheap enough to leave.
       # `access` comes from publishConfig in package.json. Provenance is implied
