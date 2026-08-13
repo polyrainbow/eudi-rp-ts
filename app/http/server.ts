@@ -2,6 +2,7 @@ import { type IncomingMessage, type ServerResponse, createServer } from 'node:ht
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
+import { auditPresentation, auditSink } from '../audit.ts';
 import type { Config } from '../config.ts';
 import { buildAuthorizationRequest } from '../../src/oid4vp/request.ts';
 import { verifyPresentationResponse } from '../../src/oid4vp/response.ts';
@@ -76,6 +77,12 @@ export function createVerifierServer(
         responseId: request.responseId,
         expiresAt: Date.now() + config.requestTtlSeconds * 1000,
       });
+      // The first line of this presentation's trail, and the one that
+      // introduces the correlation id every later line carries.
+      auditPresentation(session.id, 'presentation.requested', {
+        vct: config.requestedVct,
+        clientIdPrefix: config.clientIdPrefix,
+      });
       json(res, 201, {
         id: session.id,
         walletUri: request.walletUri,
@@ -141,6 +148,12 @@ export function createVerifierServer(
     if (!session) {
       // Without a session there is no nonce to check the presentation against,
       // so there is nothing safe to do here.
+      //
+      // Audited under the response id rather than a session id, because there
+      // is no session — an expired one, a replayed nonce, or a wallet posting
+      // somewhere it invented. That is worth a line precisely because no
+      // verifier will run and so the library will emit nothing.
+      auditPresentation(responseId, 'presentation.rejected', { reason: 'SESSION_UNKNOWN' });
       json(res, 400, { error: 'invalid_request', reason: 'SESSION_UNKNOWN' });
       return;
     }
@@ -159,6 +172,7 @@ export function createVerifierServer(
         nonce: session.nonce,
         requestPayload: session.requestPayload,
         decryptionJwk: session.decryptionJwk,
+        onEvent: auditSink(session.id),
       },
       parsedResponse,
     );

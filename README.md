@@ -82,6 +82,7 @@ src/oid4vp/response.ts    response validation, hand-off to src/verify.ts
 src/oid4vp/callbacks.ts   the crypto callbacks @openid4vc/openid4vp requires
 
 app/config.ts             environment -> library options
+app/audit.ts              verification events -> JSON lines on stdout
 app/http/                 server, in-memory session store
 app/main.ts               entry point
 app/public/index.html     the single page
@@ -776,6 +777,28 @@ the caller was told to reject, which is the single claim it exists to make.
 predicate was satisfied, and therefore whether the holder disclosed a boolean or
 a full date of birth. An envelope rejection, where the wallet declined before
 any credential was seen, has no `format` at all rather than a guessed one.
+
+`app/audit.ts` is a worked example: the demo turns the events into one JSON
+object per line, binding each to the presentation id — the library has no notion
+of a session, so correlation is the application's to add, and without it two
+holders presenting at once produce a trail nothing can be read out of. It also
+logs what the library never sees: that a presentation was requested, and the
+`SESSION_UNKNOWN` rejections the server makes before any verifier runs. A real
+round trip against the reference issuer's credential looks like this:
+
+```json
+{"at":"…","presentation":"04cb0a12-…","type":"presentation.requested","vct":"urn:eudi:pid:1","clientIdPrefix":"redirect_uri"}
+{"at":"…","presentation":"04cb0a12-…","type":"verification.started","format":"dc+sd-jwt","vct":"urn:eudi:pid:1"}
+{"at":"…","presentation":"04cb0a12-…","type":"issuer.resolved","format":"dc+sd-jwt","subject":"CN=PID DS - 002…","chainLength":2}
+{"at":"…","presentation":"04cb0a12-…","type":"verification.accepted","format":"dc+sd-jwt","vct":"urn:eudi:pid:1","evidence":"birthdate","durationMs":14}
+```
+
+`evidence: "birthdate"` is the privacy fact worth having in a record: the
+current reference PID carries no age attribute, so proving 18-or-over meant the
+holder disclosing a full date of birth. Note that every field of every event is
+logged verbatim — the application does not filter, because "carries no personal
+data" is the library's guarantee and is tested there, and re-deciding it in the
+consumer is how a tested guarantee turns into an assumed one.
 
 ## Three things the libraries do not do
 

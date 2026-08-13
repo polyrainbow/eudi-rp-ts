@@ -130,6 +130,10 @@ Two invariants there, both pinned by tests in the same file:
   sequence, each event naming its `format`. Same rule as the status check in `response.ts`: what a
   wallet happens to answer in must not decide what the verifier can audit. A new emit point on one
   path needs its counterpart on the other.
+- **The demo consumes them in `app/audit.ts`** — JSON lines on stdout, correlated by presentation
+  id, which is the application's to add because the library has no notion of a session. It logs
+  every event field verbatim on purpose: the no-personal-data guarantee is the library's and is
+  tested there, so re-deciding it in the consumer would turn a tested property into an assumed one.
 - **Exactly one verdict per verification, owned by the outermost verifier.** `verifyCredential` and
   `verifyMdoc` are entry points *and* steps inside `verifyAgeOver18`, `verifyDeviceResponse` and
   `verifyPresentationResponse`, each of which can still reject what the inner one accepted. The
