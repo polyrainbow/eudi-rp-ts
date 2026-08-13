@@ -86,10 +86,14 @@ describe('the DCQL query offers both formats', () => {
 
   it('uses the mdoc spelling for the mdoc alternative', () => {
     const mdoc = ageOver18Query('urn:eudi:pid:1').credentials[1]!;
+    // Narrowed rather than asserted, because `meta` means something different
+    // in each format: reading `doctype_value` is only a question worth asking
+    // once this is the mdoc alternative.
+    assert.ok(mdoc.format === 'mso_mdoc');
 
     assert.equal(mdoc.meta.doctype_value, PID_MDOC_NAMESPACE);
     assert.deepEqual(
-      mdoc.claims.map((c) => c.path),
+      mdoc.claims?.map((c) => c.path),
       [
         [PID_MDOC_NAMESPACE, 'age_over_18'],
         [PID_MDOC_NAMESPACE, 'birth_date'],

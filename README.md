@@ -83,7 +83,7 @@ src/mdoc/device-response.ts     DeviceResponse + device authentication
 src/mdoc/cose.ts          COSE_Sign1 verification
 src/mdoc/session-transcript.ts  the OID4VP handover a device signature commits to
 src/oid4vp/identity.ts    who this verifier is on the wire
-src/oid4vp/query.ts       the DCQL query
+src/oid4vp/query.ts       DCQL query types, and the age-over-18 query built with them
 src/oid4vp/request.ts     authorization request (+ JAR)
 src/oid4vp/response.ts    response validation, hand-off to whichever verifier
 src/oid4vp/callbacks.ts   the crypto callbacks @openid4vc/openid4vp requires

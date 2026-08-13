@@ -112,6 +112,18 @@ export {
   MDOC_CREDENTIAL_QUERY_ID,
   PID_MDOC_NAMESPACE,
 } from './oid4vp/query.ts';
+// The DCQL query itself. `ageOver18Query` is one builder of it, not the shape:
+// a query is read back as well as sent, and what it asks for is what the
+// response is checked against.
+export type {
+  ClaimsPath,
+  ClaimsQuery,
+  CredentialQuery,
+  CredentialSetQuery,
+  DcqlQuery,
+  MdocCredentialQuery,
+  SdJwtVcCredentialQuery,
+} from './oid4vp/query.ts';
 export { clientId, responseUri, verifierBaseUrl, x509Hash } from './oid4vp/identity.ts';
 export type { ClientIdPrefix, VerifierIdentity } from './oid4vp/identity.ts';
 
