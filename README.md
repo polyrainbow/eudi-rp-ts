@@ -129,6 +129,7 @@ deploy it as-is; use the library inside your own service.
 | `STATUS_CHECK` | `true` | Verify each credential's status list. Set `false` only for an offline demo. |
 | `CERT_REVOCATION_CHECK` | `true` | Check the issuer's certificate chain by CRL or OCSP. Fails closed, so set `false` if the CA's endpoints are unreachable from your deployment. |
 | `MDOC_TOLERATE_MALFORMED_VALIDITY` | `false` | Accept an mdoc whose `validUntil` is not valid RFC 3339. Needed for the EU reference issuer today; see upstream issue #177. |
+| `VERIFICATION_TIMEOUT_MS` | `30000` | A bound on one whole presentation check, which the per-request timeouts are not: a verification can fetch a status list and then a CRL per certificate. Exceeding it is `VERIFICATION_ABORTED`. |
 | `TRUST_MODE` | `pinned` | Or `lotl`. |
 | `TRUST_ANCHORS_FILE` / `TRUST_ANCHORS_PEM` | — | PEM anchors, required for `pinned`. Path or inline. |
 | `LOTL_URL` | EU LOTL | Trust list to fetch for `lotl`. |
@@ -703,6 +704,45 @@ verifier would otherwise agree with it about a mistake. See REPRODUCE.md.
 Pass a shared `revocationCache` (`createRevocationCache()`) in anything serving
 traffic: a CRL covers every certificate its CA ever issued, so refetching it per
 credential is the difference between one request and one per holder.
+
+### Bounding a whole verification
+
+Every outbound request below has its own deadline. That bounds a *request*, and
+a verification is not one: it can fetch a status list, then a CRL or an OCSP
+round trip for each certificate in the chain, in sequence. Ten seconds each is
+not ten seconds, and under load the number that matters is the total.
+
+So `verifyCredential`, `verifyMdoc`, `verifyDeviceResponse` and
+`verifyPresentationResponse` all take a `signal`. `AbortSignal.timeout(ms)` is
+the deadline; anything else that aborts is cancellation — a client that hung up,
+a shutdown, work nobody is waiting for. It is combined with each request's own
+timeout rather than replacing it, so neither bound is lost.
+
+An abort is `VERIFICATION_ABORTED`: a rejection like any other, not a thrown
+`AbortError`, so it fails closed and cannot be caught somewhere that treats a
+throw as "carry on". It is kept distinct from `STATUS_UNAVAILABLE` and
+`ISSUER_REVOCATION_UNAVAILABLE` because those say an endpoint did not answer,
+and reporting our own deadline as one of them sends an operator to look at an
+issuer that was answering fine. Which of the two it is comes from the signal's
+state, never from the shape of the error.
+
+**A cancellation is never remembered as an outage.** The status and revocation
+caches remember failures — deliberately, so an endpoint that is down does not
+cost a full timeout per credential — and an abort recorded there would be
+served to *other* callers for the error TTL, turning one client's timeout into
+everybody's. Aborts are evicted rather than cached, and a test pins both halves:
+that the abort is not remembered, and that a real failure still is.
+
+The demo sets `VERIFICATION_TIMEOUT_MS` (30 s) per presentation. It deliberately
+does not abort when the wallet's connection drops, which looks like the obvious
+thing to do: under `direct_post` the browser is polling for the same outcome, so
+discarding the work would leave the session unanswered until it expired.
+
+One thing this does not cover: `fetchTrustAnchors` takes no signal, so a trust
+list refresh cannot be cancelled. It is a startup and background operation
+rather than part of a verification, and it reports per-list failures rather than
+an outcome, so a signal there would need a different shape than the one this
+section describes.
 
 ### What an outbound request is allowed to do
 

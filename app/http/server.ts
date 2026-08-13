@@ -173,6 +173,16 @@ export function createVerifierServer(
         requestPayload: session.requestPayload,
         decryptionJwk: session.decryptionJwk,
         onEvent: auditSink(session.id),
+        // A bound on the whole check, which the per-request timeouts inside the
+        // library are not: one verification can fetch a status list and then a
+        // CRL per certificate.
+        //
+        // Deliberately *not* tied to the wallet's connection. Aborting when the
+        // wallet hangs up would be the obvious move and is wrong here: under
+        // `direct_post` the browser is polling for the same outcome, so
+        // discarding the work leaves the session pending until it expires and
+        // the person who scanned the code never hears an answer.
+        signal: AbortSignal.timeout(config.verificationTimeoutMs),
       },
       parsedResponse,
     );

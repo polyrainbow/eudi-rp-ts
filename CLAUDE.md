@@ -118,6 +118,25 @@ Interop workarounds are named as workarounds and default to strict —
 `tolerateMalformedMdocValidity` exists because the EU reference issuer emits a `validUntil` that is
 not valid RFC 3339 (upstream issue #177).
 
+### Cancellation
+
+`signal` on the verify options is the only bound on a *whole* verification — each fetch's
+`timeoutMs` bounds one request, and a verification makes several in sequence (status list, then a
+CRL or OCSP round trip per certificate). It is combined with the per-request deadline in
+`fetching.ts` via `AbortSignal.any`, never substituted for it.
+
+An abort is `VERIFICATION_ABORTED`, decided from `signal.aborted` and never from the error — the
+same state-not-text rule as every other reason code — and kept distinct from `STATUS_UNAVAILABLE`
+and `ISSUER_REVOCATION_UNAVAILABLE` because our deadline is not the issuer's outage. `StatusOutcome`
+and `RevocationOutcome` each carry an `aborted` kind so the caller reads a recorded fact rather than
+inferring one.
+
+The trap worth knowing: both caches remember failures, so an abort stored there is served to every
+*other* caller until the error TTL expires — one client's cancellation becomes everyone's outage.
+`loadThroughCache` in `status.ts` and `load` in `revocation.ts` evict on abort for that reason, and
+`test/cancellation.test.ts` pins both that the abort is not remembered and that a real failure still
+is.
+
 ### Events
 
 `src/events.ts` emits typed events and **carries no personal data by construction** — no claim

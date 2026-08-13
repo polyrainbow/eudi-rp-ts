@@ -54,6 +54,8 @@ export type DeviceResponseOptions = {
    * never given.
    */
   onEvent?: EventSink;
+  /** Cancellation or overall deadline; see `MdocVerifyOptions.signal`. */
+  signal?: AbortSignal;
 };
 
 export type VerifiedDeviceResponse = VerifiedMdoc & {
@@ -141,6 +143,7 @@ export async function verifyDeviceResponse(
     ...(options.revocationCache ? { revocationCache: options.revocationCache } : {}),
     ...(options.revocationTimeoutMs ? { revocationTimeoutMs: options.revocationTimeoutMs } : {}),
     ...(options.clockSkewSeconds ? { clockSkewSeconds: options.clockSkewSeconds } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
   });
   if (!verified.verified) return rejectWith(verified);
 

@@ -98,6 +98,20 @@ export type VerifyCredentialOptions = {
    * data by construction — see `src/events.ts`.
    */
   onEvent?: EventSink;
+  /**
+   * Cancellation, and the only bound on the *whole* verification.
+   *
+   * Every fetch here has its own `timeoutMs`, but a verification can make
+   * several in sequence — a status list, then a CRL or an OCSP round trip per
+   * certificate in the chain — so the per-request deadline bounds no single
+   * thing the caller cares about. `AbortSignal.timeout(ms)` is the bound;
+   * anything else that aborts is cancellation, such as a client that hung up
+   * and left work nobody is waiting for.
+   *
+   * An abort is reported as `VERIFICATION_ABORTED`, not thrown, and never as
+   * `STATUS_UNAVAILABLE` — our deadline is not the issuer's outage.
+   */
+  signal?: AbortSignal;
   now?: Date;
 };
 
@@ -131,6 +145,12 @@ export async function verifyCredential(
 
   if (requireKeyBinding && !options.keyBinding) {
     throw new Error('keyBinding is required unless requireKeyBinding is explicitly false');
+  }
+
+  // Before any of it. Signature verification is the expensive part of this
+  // function and the caller has already said it does not want the answer.
+  if (options.signal?.aborted) {
+    return rejectWith(reject('VERIFICATION_ABORTED', 'Cancelled before verification began'));
   }
 
   const issuerJwt = options.credential.split('~')[0];
@@ -245,6 +265,7 @@ export async function verifyCredential(
     // And the same algorithm policy, for the same reason: the status list is a
     // second signed statement from the same issuer about the same credential.
     allowedAlgs,
+    ...(options.signal ? { signal: options.signal } : {}),
   });
 
   const sdjwt = new SDJwtVcInstance({
@@ -290,6 +311,15 @@ export async function verifyCredential(
     if (status.outcome.kind === 'unavailable') {
       return rejectWith(reject('STATUS_UNAVAILABLE', status.outcome.detail));
     }
+    // Checked alongside the two above rather than before the library call: this
+    // is the same recorded-state rule, and the status checker is the only thing
+    // that still knows the throw was our cancellation and not a bad credential.
+    if (status.outcome.kind === 'aborted') {
+      return rejectWith(reject('VERIFICATION_ABORTED', 'Cancelled while fetching the status list'));
+    }
+    if (options.signal?.aborted) {
+      return rejectWith(reject('VERIFICATION_ABORTED', 'Cancelled during credential verification'));
+    }
     return rejectWith(mapLibraryError(error, { issuerSignature, keyBindingSignature }));
   }
 
@@ -317,12 +347,17 @@ export async function verifyCredential(
     return rejectWith(reject('KEY_BINDING_MISSING', 'Key binding required but no expectation supplied'));
   }
 
-  if (status.outcome.kind !== 'not-checked') {
+  // `aborted` is deliberately not reported as a status check: nothing was
+  // checked, and the terminal rejection already says why.
+  if (status.outcome.kind !== 'not-checked' && status.outcome.kind !== 'aborted') {
     emit({
       type: 'status.checked',
       outcome: status.outcome.kind === 'revoked' ? 'revoked' : status.outcome.kind,
       cached: options.statusCache !== undefined,
     });
+  }
+  if (status.outcome.kind === 'aborted') {
+    return rejectWith(reject('VERIFICATION_ABORTED', 'Cancelled while fetching the status list'));
   }
 
   // Last, because it reaches the network and everything above can reject
@@ -335,8 +370,11 @@ export async function verifyCredential(
       ...(options.revocationCache ? { cache: options.revocationCache } : {}),
       ...(options.revocationTimeoutMs ? { timeoutMs: options.revocationTimeoutMs } : {}),
       ...(options.clockSkewSeconds ? { clockSkewSeconds: options.clockSkewSeconds } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
     });
-    emit({ type: 'issuer.revocation.checked', outcome: revocation.kind, via: revocationVia(revocation) });
+    if (revocation.kind !== 'aborted') {
+      emit({ type: 'issuer.revocation.checked', outcome: revocation.kind, via: revocationVia(revocation) });
+    }
     const rejected = revocationRejection(revocation);
     if (rejected) return rejectWith(rejected);
   }

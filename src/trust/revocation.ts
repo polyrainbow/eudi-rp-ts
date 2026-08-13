@@ -90,7 +90,13 @@ export type RevocationOutcome =
       /** RFC 5280 §5.3.1 CRLReason, when the document states one. */
       reason: number | undefined;
     }
-  | { kind: 'unavailable'; detail: string };
+  | { kind: 'unavailable'; detail: string }
+  /**
+   * The caller's signal fired. Separate from `unavailable` for the same reason
+   * the status list keeps them apart: a deadline we set is not a CA that failed
+   * to answer, and only one of those is the issuer's problem.
+   */
+  | { kind: 'aborted' };
 
 export type RevocationCheckOptions = {
   now: Date;
@@ -106,6 +112,12 @@ export type RevocationCheckOptions = {
   cache?: TtlCache<Uint8Array>;
   /** Tolerance for clock differences with the CA, in seconds. */
   clockSkewSeconds?: number;
+  /**
+   * The caller's cancellation or overall deadline. Distinct from `timeoutMs`,
+   * which bounds one request; a chain can need a CRL *and* an OCSP round trip
+   * per certificate, so the per-request bound is not a bound on this call.
+   */
+  signal?: AbortSignal;
 };
 
 /**
@@ -142,11 +154,17 @@ export async function checkChainRevocation(
     const certificate = chain[index]!;
     const issuer = chain[index + 1]!;
 
+    // Checked per certificate, not only per request: a chain needs a round trip
+    // for each one, so a signal that fired during the last is a reason not to
+    // start the next.
+    if (options.signal?.aborted) return { kind: 'aborted' };
+
     const responders = readOcspResponders(certificate);
     const distributionPoints = readCrlDistributionPoints(certificate);
     if (responders.length === 0 && distributionPoints.length === 0) continue;
 
     const outcome = await checkCertificate(certificate, issuer, responders, distributionPoints, options);
+    if (outcome.kind === 'aborted') return outcome;
     if (outcome.kind === 'revoked') return outcome;
     if (outcome.kind === 'good') checkedVia ??= outcome.via;
     // Keep the first reason, then carry on: another certificate in the path may
@@ -185,6 +203,9 @@ export function revocationRejection(outcome: RevocationOutcome): Rejected | unde
   if (outcome.kind === 'unavailable') {
     return reject('ISSUER_REVOCATION_UNAVAILABLE', outcome.detail);
   }
+  if (outcome.kind === 'aborted') {
+    return reject('VERIFICATION_ABORTED', 'Cancelled while checking issuer certificate revocation');
+  }
   return undefined;
 }
 
@@ -202,14 +223,19 @@ async function checkCertificate(
 ): Promise<RevocationOutcome> {
   const problems: string[] = [];
 
+  // An abort stops the walk rather than joining `problems`: trying the next
+  // responder after the caller has given up is work nobody is waiting for, and
+  // recording it as one more thing that did not answer would misreport why.
   for (const url of responders) {
     const outcome = await checkOcsp(certificate, issuer, url, options);
+    if (outcome.kind === 'aborted') return outcome;
     if (outcome.kind === 'revoked' || outcome.kind === 'good') return outcome;
     if (outcome.kind === 'unavailable') problems.push(outcome.detail);
   }
 
   for (const url of distributionPoints) {
     const outcome = await checkCrl(certificate, issuer, url, options);
+    if (outcome.kind === 'aborted') return outcome;
     if (outcome.kind === 'revoked' || outcome.kind === 'good') return outcome;
     if (outcome.kind === 'unavailable') problems.push(outcome.detail);
   }
@@ -282,9 +308,11 @@ async function checkCrl(
         timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         allowedProtocols: ['https:', 'http:'],
         ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
       }).then((response) => response.body),
     );
   } catch (error) {
+    if (options.signal?.aborted) return { kind: 'aborted' };
     return { kind: 'unavailable', detail: `CRL ${url}: ${message(error)}` };
   }
 
@@ -385,9 +413,11 @@ async function checkOcsp(
         timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         allowedProtocols: ['https:', 'http:'],
         ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
       }).then((response) => response.body),
     );
   } catch (error) {
+    if (options.signal?.aborted) return { kind: 'aborted' };
     return { kind: 'unavailable', detail: `OCSP ${url}: ${message(error)}` };
   }
 
@@ -608,12 +638,27 @@ function pemToDer(bytes: Uint8Array): Uint8Array {
   return new Uint8Array(Buffer.from(match[1]!.replace(/\s+/g, ''), 'base64'));
 }
 
+/**
+ * Fetch through the cache, without letting a cancellation be remembered as one.
+ *
+ * `createRevocationCache` remembers failures, which is right for a responder
+ * that is down and wrong for a caller who hung up: the entry is shared, so one
+ * aborted verification would answer `ISSUER_REVOCATION_UNAVAILABLE` for every
+ * other caller of the same CRL until it expired. A CRL covers every certificate
+ * its CA ever issued, so that is a wide blast radius for one client's timeout.
+ */
 async function load(
   key: string,
   options: RevocationCheckOptions,
   fetcher: () => Promise<Uint8Array>,
 ): Promise<Uint8Array> {
-  return options.cache ? options.cache.get(key, fetcher) : fetcher();
+  if (!options.cache) return fetcher();
+  try {
+    return await options.cache.get(key, fetcher);
+  } catch (error) {
+    if (options.signal?.aborted) options.cache.delete(key);
+    throw error;
+  }
 }
 
 function findExtension(certificate: X509Certificate, oid: string): ArrayBuffer | undefined {

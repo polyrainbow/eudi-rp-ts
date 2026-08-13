@@ -52,6 +52,11 @@ export type StatusCheckOptions = {
   /** Tolerance for clock differences with the issuer, in seconds. */
   clockSkewSeconds?: number;
   /**
+   * The caller's cancellation or overall deadline. Distinct from `timeoutMs`,
+   * which bounds this one request; this bounds whatever the caller is doing.
+   */
+  signal?: AbortSignal;
+  /**
    * Signature algorithms the status list token may be signed with.
    *
    * The same policy the credential is held to, and for the same reason: this
@@ -103,7 +108,13 @@ export type StatusOutcome =
   | { kind: 'not-checked' }
   | { kind: 'valid' }
   | { kind: 'revoked'; status: number }
-  | { kind: 'unavailable'; detail: string };
+  | { kind: 'unavailable'; detail: string }
+  /**
+   * The caller's signal fired. Recorded separately from `unavailable` for the
+   * reason the whole type exists: "we gave up" and "the issuer did not answer"
+   * are different facts, and only one of them is about the issuer.
+   */
+  | { kind: 'aborted' };
 
 export type StatusChecker = {
   statusListFetcher: (uri: string) => Promise<string>;
@@ -121,11 +132,34 @@ async function loadStatusListToken(uri: string, options: StatusCheckOptions): Pr
     headers: { Accept: STATUS_LIST_JWT },
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
   });
   if (!contentType.includes('application/statuslist+jwt')) {
     throw new Error(`Status list ${uri}: unexpected content type ${contentType}`);
   }
   return body.trim();
+}
+
+/**
+ * Fetch through the cache, without letting a cancellation be remembered as one.
+ *
+ * `createStatusListCache` remembers failures for 30 seconds, which is right for
+ * an issuer whose endpoint is down and wrong for a caller who hung up: that
+ * entry is shared, so one aborted verification would answer
+ * `STATUS_UNAVAILABLE` for every *other* caller of the same list until it
+ * expired. One client's cancellation would become everybody's outage.
+ *
+ * The abort is identified from the signal's state, never from the error, so a
+ * `fetch` that phrases cancellation differently changes nothing here.
+ */
+async function loadThroughCache(uri: string, options: StatusCheckOptions): Promise<string> {
+  if (!options.cache) return loadStatusListToken(uri, options);
+  try {
+    return await options.cache.get(uri, () => loadStatusListToken(uri, options));
+  } catch (error) {
+    if (options.signal?.aborted) options.cache.delete(uri);
+    throw error;
+  }
 }
 
 /**
@@ -264,12 +298,13 @@ export async function checkStatusList(
   reference: StatusListReference,
   options: StatusCheckOptions,
 ): Promise<StatusOutcome> {
+  if (options.signal?.aborted) return { kind: 'aborted' };
+
   let token: string;
   try {
-    token = options.cache
-      ? await options.cache.get(reference.uri, () => loadStatusListToken(reference.uri, options))
-      : await loadStatusListToken(reference.uri, options);
+    token = await loadThroughCache(reference.uri, options);
   } catch (error) {
+    if (options.signal?.aborted) return { kind: 'aborted' };
     return { kind: 'unavailable', detail: error instanceof Error ? error.message : String(error) };
   }
 
@@ -347,14 +382,14 @@ export function createStatusChecker(options: StatusCheckOptions): StatusChecker 
     async statusListFetcher(uri: string): Promise<string> {
       let token: string;
       try {
-        token = options.cache
-          ? await options.cache.get(uri, () => loadStatusListToken(uri, options))
-          : await loadStatusListToken(uri, options);
+        token = await loadThroughCache(uri, options);
       } catch (error) {
-        outcome = {
-          kind: 'unavailable',
-          detail: error instanceof Error ? error.message : String(error),
-        };
+        // `@sd-jwt` reports failure by throwing, so the outcome has to be
+        // recorded before rethrowing — this is the only place that still knows
+        // whether the signal fired.
+        outcome = options.signal?.aborted
+          ? { kind: 'aborted' }
+          : { kind: 'unavailable', detail: error instanceof Error ? error.message : String(error) };
         throw error;
       }
 

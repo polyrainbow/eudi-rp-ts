@@ -33,6 +33,16 @@ export type FetchOptions = {
   /** URL schemes this fetch is willing to speak, as `URL.protocol` values. */
   allowedProtocols?: readonly string[];
   fetchImpl?: typeof fetch;
+  /**
+   * The caller's cancellation, combined with `timeoutMs` rather than replacing
+   * it: the deadline is this module's policy and the signal is the caller's
+   * reason, and whichever fires first wins.
+   *
+   * `RequestInit` already declares a `signal`, and until this existed one
+   * passed there was destructured into the fetch call and then silently
+   * overwritten by the internal timeout — accepted, ignored, no error.
+   */
+  signal?: AbortSignal;
 };
 
 export const DEFAULT_TIMEOUT_MS = 10_000;
@@ -73,6 +83,7 @@ export async function fetchBytes(
     maxRedirects = DEFAULT_MAX_REDIRECTS,
     allowedProtocols = DEFAULT_ALLOWED_PROTOCOLS,
     fetchImpl = fetch,
+    signal: callerSignal,
     ...rest
   } = init;
 
@@ -82,7 +93,12 @@ export async function fetchBytes(
   //
   // AbortSignal.timeout covers the request including the body, which a
   // setTimeout around the fetch call alone would not.
-  const signal = AbortSignal.timeout(timeoutMs);
+  //
+  // The caller's signal is combined with it, not chosen between: this module's
+  // deadline bounds one request, the caller's signal bounds whatever it is
+  // doing, and neither subsumes the other.
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const signal = callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline;
 
   let target = url;
   for (let hop = 0; ; hop += 1) {

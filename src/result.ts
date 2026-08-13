@@ -75,7 +75,22 @@ export type ReasonCode =
    * fetched, verified, or read. Distinct from `STATUS_UNAVAILABLE`, which is
    * the credential's own status list.
    */
-  | 'ISSUER_REVOCATION_UNAVAILABLE';
+  | 'ISSUER_REVOCATION_UNAVAILABLE'
+  /**
+   * The caller's `AbortSignal` fired — a cancellation, or a deadline over the
+   * whole verification rather than the per-request one each fetch already has.
+   *
+   * Distinct from `STATUS_UNAVAILABLE` and `ISSUER_REVOCATION_UNAVAILABLE`,
+   * which is the point of having it: those say an endpoint we depend on did not
+   * answer, and reporting our own cancellation as one of them blames an issuer
+   * for a deadline we set. Derived from the signal's state rather than from the
+   * shape of the error, on the same rule as every other code here.
+   *
+   * A rejection rather than a thrown `AbortError`, so that cancelling cannot
+   * accidentally be caught somewhere that treats a throw as "keep going", and
+   * so it fails closed like every other outcome.
+   */
+  | 'VERIFICATION_ABORTED';
 
 export type Rejected = {
   verified: false;

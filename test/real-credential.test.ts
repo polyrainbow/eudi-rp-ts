@@ -117,6 +117,7 @@ describe('real credential over OID4VP', { skip: expired ? `credential expired ${
     checkStatus: false,
     checkCertificateRevocation: false,
     tolerateMalformedMdocValidity: false,
+    verificationTimeoutMs: 30_000,
       trust: {
         mode: 'pinned' as const,
         pinnedAnchorsPem: undefined,

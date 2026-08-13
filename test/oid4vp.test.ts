@@ -35,6 +35,7 @@ before(async () => {
     checkStatus: false,
     checkCertificateRevocation: false,
     tolerateMalformedMdocValidity: false,
+    verificationTimeoutMs: 30_000,
     trust: {
       mode: 'pinned',
       pinnedAnchorsPem: undefined,

@@ -19,6 +19,16 @@ export type Config = VerifierIdentity & {
    * issuer emits one; see upstream issue #177.
    */
   tolerateMalformedMdocValidity: boolean;
+  /**
+   * How long one presentation check may take, in total.
+   *
+   * Distinct from the per-request timeouts inside the library: a verification
+   * can fetch a status list and then a CRL per certificate, so ten seconds each
+   * is not ten seconds. Without a bound here a handful of wallets arriving
+   * while an issuer's endpoint hangs will hold every request open until each
+   * inner deadline expires in turn.
+   */
+  verificationTimeoutMs: number;
 };
 
 export type TrustConfig = TrustListOptions & {
@@ -104,6 +114,10 @@ export function loadConfig(): Config {
     // for an offline demo, or where the CA's CRL endpoint is unreachable.
     checkCertificateRevocation: env('CERT_REVOCATION_CHECK') !== 'false',
     tolerateMalformedMdocValidity: env('MDOC_TOLERATE_MALFORMED_VALIDITY') === 'true',
+    // Comfortably above a healthy round trip — the reference issuer's status
+    // list and CRL answer in well under a second — and far below the sum of
+    // every inner timeout, which is the number this exists to replace.
+    verificationTimeoutMs: Number(env('VERIFICATION_TIMEOUT_MS') ?? 30_000),
     allowedAlgs: allowedAlgs.length > 0 ? allowedAlgs : DEFAULT_ALLOWED_ALGS,
     trust: {
       mode: (env('TRUST_MODE') ?? 'pinned') as TrustConfig['mode'],

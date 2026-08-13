@@ -82,6 +82,13 @@ export type MdocVerifyOptions = {
    * verification is auditable.
    */
   onEvent?: EventSink;
+  /**
+   * Cancellation, and the only bound on the whole verification — the same
+   * option `verifyCredential` takes, for the same reason: `timeoutMs` bounds
+   * one request and this call can make several. Reported as
+   * `VERIFICATION_ABORTED`.
+   */
+  signal?: AbortSignal;
 };
 
 export type VerifiedMdoc = {
@@ -112,6 +119,12 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
     }
     return outcome;
   };
+
+  // Before any of it, for the reason `verifyCredential` gives: the caller has
+  // already said it does not want the answer.
+  if (options.signal?.aborted) {
+    return rejectWith(reject('VERIFICATION_ABORTED', 'Cancelled before verification began'));
+  }
 
   let issuerSigned: unknown;
   try {
@@ -239,7 +252,13 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
         // The status list is JOSE even when the credential is COSE, so the
         // policy that reaches it is the caller's list, not the COSE subset.
         allowedAlgs,
+        ...(options.signal ? { signal: options.signal } : {}),
       });
+      // Not reported as a status check when the caller cancelled: nothing was
+      // checked, and the terminal rejection already says why.
+      if (outcome.kind === 'aborted') {
+        return rejectWith(reject('VERIFICATION_ABORTED', 'Cancelled while fetching the status list'));
+      }
       // Emitted before the rejections below, so a revoked credential is
       // recorded as having been checked and not only as having been refused.
       emit({
@@ -269,8 +288,11 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
       ...(options.revocationCache ? { cache: options.revocationCache } : {}),
       ...(options.revocationTimeoutMs ? { timeoutMs: options.revocationTimeoutMs } : {}),
       ...(options.clockSkewSeconds ? { clockSkewSeconds: options.clockSkewSeconds } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
     });
-    emit({ type: 'issuer.revocation.checked', outcome: revocation.kind, via: revocationVia(revocation) });
+    if (revocation.kind !== 'aborted') {
+      emit({ type: 'issuer.revocation.checked', outcome: revocation.kind, via: revocationVia(revocation) });
+    }
     const rejected = revocationRejection(revocation);
     if (rejected) return rejectWith(rejected);
   }

@@ -44,6 +44,16 @@ export type PresentationContext = {
    * format, because at that point no credential has been seen.
    */
   onEvent?: EventSink;
+  /**
+   * Cancellation, and the only bound on the whole presentation check.
+   *
+   * A server handling this has one obvious source: `AbortSignal.timeout(ms)`
+   * for a deadline it is willing to spend on a wallet's response. Aborting when
+   * the *wallet* disconnects is usually wrong here — under `direct_post` the
+   * browser is polling for the same outcome, so throwing the work away leaves
+   * the session unanswered.
+   */
+  signal?: AbortSignal;
 };
 
 /**
@@ -80,6 +90,12 @@ export async function verifyPresentationResponse(
     });
     return outcome;
   };
+
+  // Before the envelope is even decrypted: JARM decryption is real work, and an
+  // abort here is the caller saying nobody is waiting for the outcome.
+  if (context.signal?.aborted) {
+    return rejectWith(reject('VERIFICATION_ABORTED', 'Cancelled before the response was read'));
+  }
 
   const verifier = new Openid4vpVerifier({
     callbacks: {
@@ -216,6 +232,7 @@ async function verifySdJwt(
     // `verifyAgeOver18` owns the verdict, predicate included, so the sink goes
     // straight through rather than being wrapped.
     ...(context.onEvent ? { onEvent: context.onEvent } : {}),
+    ...(context.signal ? { signal: context.signal } : {}),
     keyBinding: { nonce: context.nonce, audience },
   });
 
@@ -269,6 +286,7 @@ async function verifyMdocPresentation(
     checkCertificateRevocation: context.config.checkCertificateRevocation,
     ...(context.revocationCache ? { revocationCache: context.revocationCache } : {}),
     ...(context.config.allowedAlgs ? { allowedAlgs: context.config.allowedAlgs } : {}),
+    ...(context.signal ? { signal: context.signal } : {}),
   });
   if (!result.verified) return rejectWith(result);
 
