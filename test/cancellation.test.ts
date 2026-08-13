@@ -57,7 +57,19 @@ function assertRejected(outcome: Outcome<unknown>, reason: ReasonCode): asserts 
  */
 const hangs: typeof fetch = ((_url: string, init?: RequestInit) =>
   new Promise((_resolve, rejectPromise) => {
+    // A real pending request holds a socket, and a socket keeps the event loop
+    // alive. This fake held nothing, which is a difference that matters: every
+    // other timer these tests depend on is *unref'd* — `AbortSignal.timeout` is
+    // by Node's design, and so is anything this file schedules — so the loop
+    // had nothing to keep it running, drained, and node:test reported every
+    // promise as "still pending but the event loop has already resolved".
+    //
+    // Node 24 happened to hold the loop open and hid it; 22.18.0, the floor
+    // `engines` promises, did not. Holding a handle while pending is both the
+    // fix and the more faithful imitation of a request that never answers.
+    const socket = setInterval(() => {}, 1_000);
     init?.signal?.addEventListener('abort', () => {
+      clearInterval(socket);
       rejectPromise(init.signal?.reason ?? new Error('aborted'));
     });
   })) as typeof fetch;
@@ -70,10 +82,16 @@ const serving = (token: string): typeof fetch =>
       headers: { 'content-type': 'application/statuslist+jwt' },
     })) as typeof fetch;
 
-/** Aborted a tick from now, so the abort lands while a fetch is in flight. */
+/**
+ * Aborted a tick from now, so the abort lands while a fetch is in flight.
+ *
+ * Deliberately *not* `.unref()`ed: this timer is the only thing that makes the
+ * test progress, and unref'ing it — which an earlier version did — told Node it
+ * was free to exit before the abort ever fired.
+ */
 function abortingSoon(ms = 5): AbortSignal {
   const controller = new AbortController();
-  setTimeout(() => controller.abort(), ms).unref();
+  setTimeout(() => controller.abort(), ms);
   return controller.signal;
 }
 
