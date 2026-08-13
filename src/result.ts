@@ -27,6 +27,16 @@ export type ReasonCode =
    * under any policy that was agreed the whole way down.
    */
   | 'ISSUER_POLICY_NOT_PERMITTED'
+  /**
+   * A certificate on the path carries a critical extension this library does
+   * not process, which RFC 5280 §6.1.4 (o) requires be rejected. Distinct from
+   * `ISSUER_UNTRUSTED`, and the distinction is the useful part: nothing is
+   * known to be wrong with the issuer, the chain or the credential — this
+   * verifier is the thing that fell short, and the operator's next step is to
+   * read the extension rather than to go looking at the issuer. `detail`
+   * carries the OIDs.
+   */
+  | 'ISSUER_EXTENSION_UNRECOGNISED'
   // Validity window
   | 'CREDENTIAL_EXPIRED'
   | 'CREDENTIAL_NOT_YET_VALID'

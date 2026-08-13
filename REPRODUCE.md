@@ -562,14 +562,35 @@ for any subject at all — validated. Node exposes `.ca` and not the constraint
 beside it, which is why it went unread; nothing in the reference deployment is
 affected, because its chains are one document signer under the anchor directly.
 
-**Six extensions are ever marked critical, and one is still unprocessed.**
-`privateKeyUsagePeriod` (RFC 3280 §4.2.1.4, dropped from RFC 5280), on four
-certificates. RFC 5280 §6.1.4 (o) says a certificate with a critical extension
-the verifier does not process must be rejected, and this project does not
-implement that rule — see README "Spec-compliant vs simplified". The
-measurement is here because it bounds what the rule would cost: today, four
-certificates. Note that 78 of these were unprocessed before certificate
-policies were implemented.
+**Six extensions are ever marked critical, and one is outside the recognised
+set.** `privateKeyUsagePeriod` (RFC 3280 §4.2.1.4, dropped from RFC 5280), on
+four certificates. RFC 5280 §6.1.4 (o) says a certificate with a critical
+extension the verifier does not process must be rejected, and this measurement
+is what decided that the rule could be turned on: it bounded the cost at four
+certificates, none of them in the reference deployment. It is now implemented —
+see README "Critical extensions" — so this number is no longer a gap being
+bounded but the set of certificates a deployment **rejects**, which is why
+`ecosystem-drift.test.ts` re-measures it against the library's own
+`RECOGNISED_CRITICAL_EXTENSIONS` rather than a copy. Note that 78 certificates
+were outside the set before certificate policies were implemented, which is most
+of why those came first.
+
+The same pass over the two committed real credentials confirms the reference
+deployment is unaffected — `PID DS - 002` and `PID Issuer CA - UT 02` mark only
+`basicConstraints` and `keyUsage` critical, for the SD-JWT VC and the mdoc
+alike:
+
+```
+$ node -e "…read every extension and its critical flag off the x5c in
+           test/fixtures/real/eudiw-pid-sd-jwt-vc.txt…"
+
+PID DS - 002   2.5.29.19* 2.5.29.35 1.3.6.1.5.5.7.1.1 2.5.29.32 2.5.29.37
+               2.5.29.31 2.5.29.14 2.5.29.15* 1.3.6.1.5.5.7.1.3
+               (* = critical)
+```
+
+`test/critical-extensions.test.ts` pins that against the committed fixtures, so
+it is checked offline on every run rather than only when the drift test does.
 
 ### Trust list freshness: what the lists declare about themselves, 2026-08-12
 

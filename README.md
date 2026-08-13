@@ -197,19 +197,21 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 (§14.8); x5c chain signature linkage and certificate validity windows; ETSI TS
 119 612 trust list signature verification, including RSASSA-PSS and ECDSA.
 
+**Certificate path validation is RFC 5280 §6.1 in full**, which it was not
+until recently: validity windows, signature linkage, that every issuing
+certificate is a CA and asserts `keyCertSign` (§6.1.4 (n)), that the leaf
+asserts `digitalSignature` (see below), path length — the caller's limit *and*
+each CA's own `pathLenConstraint` (§6.1.4 (l), (m), see below) — Name
+Constraints (§6.1.3, see below), certificate policies as the full §6.1 state
+machine (see below), rejection of critical extensions this project does not
+process (§6.1.4 (o), see below), and revocation by CRL or OCSP (see below).
+Three readings within that are this project's own and are argued where they are
+made: the trust anchor is treated per RFC 5937 rather than §6.1, Extended Key
+Usage is enforced only against a `requiredExtendedKeyUsage` the caller sets, and
+policy qualifiers are read but not acted on — which §6.1.5 (f) leaves local.
+
 **Simplified, deliberately.**
 
-- **Certificate path validation is partial.** Checked: validity windows,
-  signature linkage, that every issuing certificate is a CA and asserts
-  `keyCertSign`, that the leaf asserts `digitalSignature` (see below), path
-  length — the caller's limit *and* each CA's own `pathLenConstraint` (see
-  below) — an optional Extended Key Usage allowlist, Name Constraints (see
-  below), certificate policies as the full RFC 5280 §6.1 state machine (see
-  below), and revocation by CRL or OCSP (see below). Not checked: **a critical
-  extension this project does not recognise is ignored rather than rejected**,
-  where §6.1.4 (o) requires rejection. Measured on 2026-08-12, that is
-  `privateKeyUsagePeriod` on four certificates across the live lists
-  (REPRODUCE.md) — before certificate policies were implemented it was 78.
 - **Trust lists are not fully TS 119 615.** Service status history,
   validity-time evaluation and the list's own issue date and next-update *are*
   implemented (see below). Not implemented: no qualifier processing and no `Sie`
@@ -406,6 +408,69 @@ PID document signer asserts exactly `digitalSignature`, for the SD-JWT VC and
 the mdoc alike, and its CA asserts `keyCertSign|cRLSign`. So the rules cost
 nothing today — the same measured argument as Name Constraints, and it goes
 stale the same way, so `ecosystem-drift.test.ts` watches it.
+
+### Critical extensions
+
+Marking an extension **critical** is a CA saying *this changes what the
+certificate means, and you may not use it without understanding me*. RFC 5280
+§6.1.4 (o) is the other half of that bargain: a validator meeting one it does
+not process must reject the certificate.
+
+The rule is inverted from every other check here. Those ask whether a
+certificate satisfies something; this asks whether anything on it was left
+unread. A validator that skips a critical extension has not validated a weaker
+path — it has validated a *different certificate* from the one the CA issued,
+because the extension it ignored could be narrowing that certificate to a
+purpose this is not, and silence reads exactly like permission.
+
+Which makes the recognised set the security-relevant part, and it is exported as
+`RECOGNISED_CRITICAL_EXTENSIONS` to be read rather than taken on faith. The
+membership rule is **this library reads the extension and lets it change an
+outcome** — nothing is on it for being common or expected, which is how this
+rule turns into decoration. Eleven OIDs: `basicConstraints`, `keyUsage`,
+`nameConstraints`, `subjectAltName`, `certificatePolicies`, `policyMappings`,
+`policyConstraints`, `inhibitAnyPolicy`, `extKeyUsage`,
+`cRLDistributionPoints` and `authorityInfoAccess`.
+
+Two of those are processed *conditionally*, and saying so is the point of
+listing them: `extKeyUsage` is enforced against the caller's
+`requiredExtendedKeyUsage`, unset by default — §4.2.1.12 leaves the purpose
+check to the application in exactly that way, and 1002 certificates on the live
+lists mark it critical, so a verifier rejecting them would be enforcing the rule
+by refusing eIDAS. `cRLDistributionPoints` and `authorityInfoAccess` are read to
+find a CRL or a responder, which fails closed, but only while
+`checkCertificateRevocation` is on. The set is deliberately **not** computed
+from the caller's options: a certificate that is valid under one configuration
+and malformed under another makes this rejection unreproducible.
+
+`subjectKeyIdentifier`, `authorityKeyIdentifier`, `issuerAltName`,
+`subjectDirectoryAttributes` and `freshestCRL` are absent on purpose. RFC 5280
+requires all five to be non-critical, so a critical one is a non-conforming
+certificate and rejecting it is the rule working rather than a gap in it.
+
+**The trust anchor is exempt.** §6.1 never processes it as a certificate — it
+supplies the initial state, and the loop (o) belongs to runs over the
+certificates below it. RFC 5937 does extend an anchor's influence downward, but
+only its *constraints*, which this library obeys; a critical extension is not a
+constraint on the path but an instruction about the certificate carrying it.
+Same rule as everywhere else here: constraints bind, assertions do not. An
+anchor is trusted because an operator pinned it or a Member State published it,
+not because every field on it was understood.
+
+Measured on 2026-08-12 (REPRODUCE.md): six extensions are ever marked critical
+across the live trusted lists, and exactly one is outside the set —
+`privateKeyUsagePeriod` (RFC 3280 §4.2.1.4, dropped from RFC 5280), on four
+certificates. So turning this rule on costs four certificates today, none of
+them in the reference deployment: the EU PID document signer and its CA mark
+only `basicConstraints` and `keyUsage` critical, and a test pins that against
+the committed real credential. Before certificate policies were implemented the
+same measurement was 78, which is most of why they came first.
+
+The rejection is `ISSUER_EXTENSION_UNRECOGNISED`, kept distinct from
+`ISSUER_UNTRUSTED` because the distinction is the useful part: nothing is known
+to be wrong with the issuer, the chain or the credential. This verifier is the
+thing that fell short, and the operator's next step is to go and read the
+extension rather than to go looking at the issuer.
 
 ### Trust list validity time
 

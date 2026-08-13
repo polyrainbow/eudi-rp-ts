@@ -3,6 +3,7 @@ import { decodeProtectedHeader, unsupportedKeyReason } from '../crypto.ts';
 import { type Outcome, accept, reject } from '../result.ts';
 import type { TrustAnchors } from './anchors.ts';
 import { isSelfIssued, readBasicConstraints } from './basic-constraints.ts';
+import { unrecognisedCriticalExtensions } from './critical-extensions.ts';
 import { readKeyUsage } from './key-usage.ts';
 import { certificateNames, readNameConstraints } from './name-constraints.ts';
 import { checkNames } from './name-matching.ts';
@@ -23,8 +24,9 @@ import { type CertificatePolicyOptions, checkCertificatePolicies } from './polic
  * every issuing certificate is a CA and asserts `keyCertSign`, that the leaf
  * asserts `digitalSignature` if it asserts any KeyUsage at all, path length —
  * the caller's limit and every CA's own `pathLenConstraint` — an optional
- * Extended Key Usage allowlist, Name Constraints, certificate policies, and
- * termination at a trust anchor.
+ * Extended Key Usage allowlist, Name Constraints, certificate policies,
+ * termination at a trust anchor, and that no certificate below the anchor
+ * carries a critical extension this library does not process (§6.1.4 (o)).
  *
  * Of those, the *leaf* KeyUsage check is the one nothing else was doing. The
  * issuing-side `keyCertSign` requirement is already inside Node's `.ca` and
@@ -195,6 +197,12 @@ export function resolveIssuerCertificateChain(
 
   const fullChain = equalAnchor ? chain : [...chain, signingAnchor];
 
+  // Before every check below it: those read specific extensions and conclude
+  // something, and concluding anything about a certificate carrying an
+  // instruction we could not read is the mistake §6.1.4 (o) exists to prevent.
+  const unread = checkCriticalExtensions(fullChain);
+  if (unread) return reject('ISSUER_EXTENSION_UNRECOGNISED', unread);
+
   // Applied to the chain including the anchor: a trust anchor that constrains
   // itself to a namespace means it, and RFC 5280 §6.1 applies constraints from
   // every certificate in the path.
@@ -285,6 +293,38 @@ function checkMaySignCertificates(cert: X509Certificate, position: string): stri
   }
   if (!usage || usage.bits.has('keyCertSign')) return undefined;
   return `${position} does not assert keyCertSign (has ${[...usage.bits].join(', ') || 'no usage'}): ${cert.subject}`;
+}
+
+/**
+ * Unrecognised critical extensions across a whole path (RFC 5280 §6.1.4 (o)).
+ *
+ * `chain` is leaf-first with the anchor last, and the anchor is exempt. §6.1
+ * never processes it as a certificate — it supplies the initial state and the
+ * loop that (o) belongs to runs over the certificates below it. RFC 5937 does
+ * extend an anchor's influence downward, but only its *constraints*: name
+ * constraints, `policyConstraints`, `inhibitAnyPolicy`, `pathLenConstraint`,
+ * each of which this library obeys. A critical extension is not a constraint on
+ * the path, it is an instruction about the certificate carrying it, and reading
+ * the anchor's own assertions is the thing this codebase declines to do
+ * everywhere else. Constraints bind, assertions do not.
+ *
+ * Which leaves the anchor answerable the way an anchor should be: it is trusted
+ * because an operator pinned it or a Member State published it, not because we
+ * understood every field on it.
+ */
+function checkCriticalExtensions(chain: X509Certificate[]): string | undefined {
+  for (const cert of chain.slice(0, -1)) {
+    let unrecognised: string[];
+    try {
+      unrecognised = unrecognisedCriticalExtensions(cert);
+    } catch (error) {
+      return `Cannot read the extensions of ${cert.subject}: ${String(error)}`;
+    }
+    if (unrecognised.length > 0) {
+      return `${cert.subject} carries critical extension(s) this library does not process: ${unrecognised.join(', ')}`;
+    }
+  }
+  return undefined;
 }
 
 /**

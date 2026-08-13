@@ -6,17 +6,19 @@ It verifies credentials correctly as far as it goes, and the README is explicit
 about where it stops. Before relying on it for anything real, read
 "Spec-compliant vs simplified" there. The gaps that matter most:
 
-- **Certificate path validation is nearly complete, and the remainder is
-  named.** Signature linkage, validity windows, path length — both the caller's
-  limit and each CA's own `pathLenConstraint` — an optional EKU allowlist, RFC
-  5280 Name Constraints, the KeyUsage bits that matter (`keyCertSign` on every
-  issuer, `digitalSignature` on the leaf), certificate policies as the full RFC
-  5280 §6.1 state machine (the policy tree, `policyMappings`,
-  `policyConstraints`, `inhibitAnyPolicy`) and revocation by CRL or OCSP are all
-  checked. What is **not**: a critical extension this project does not recognise
-  is ignored rather than rejected, where §6.1.4 (o) requires rejection. Measured
-  against the live trusted lists, exactly one such extension is in use —
-  `privateKeyUsagePeriod`, on four certificates (REPRODUCE.md).
+- **Certificate path validation is RFC 5280 §6.1 in full.** Signature linkage,
+  validity windows, path length — both the caller's limit and each CA's own
+  `pathLenConstraint` — an optional EKU allowlist, RFC 5280 Name Constraints,
+  the KeyUsage bits that matter (`keyCertSign` on every issuer,
+  `digitalSignature` on the leaf), certificate policies as the full §6.1 state
+  machine (the policy tree, `policyMappings`, `policyConstraints`,
+  `inhibitAnyPolicy`), rejection of critical extensions this project does not
+  process (§6.1.4 (o)) and revocation by CRL or OCSP are all checked. Three
+  readings within that are this project's own, and each is argued in the README
+  rather than left implicit: the trust anchor follows RFC 5937 rather than §6.1
+  — including its exemption from §6.1.4 (o) — Extended Key Usage is enforced
+  only against a `requiredExtendedKeyUsage` the caller sets, and policy
+  qualifiers are read but not acted on, which §6.1.5 (f) leaves local.
 - **Trust list processing is not full ETSI TS 119 615.** Service status history,
   validity-time evaluation and the list's own issue date and next-update are
   implemented — a list past its `NextUpdate`, or declaring none, is refused

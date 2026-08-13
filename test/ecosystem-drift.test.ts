@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { TrustAnchors } from '../src/trust/anchors.ts';
+import { RECOGNISED_CRITICAL_EXTENSIONS } from '../src/trust/critical-extensions.ts';
 import {
   checkTrustListFreshness,
   parsePointers,
@@ -56,25 +57,6 @@ const PID_ISSUER_CA_AIA = 'https://preprod.pki.eudiw.dev/aia/PIDIssuerCA02-UT.ca
 const JWT_VC_ISSUER_METADATA = 'https://issuer.eudiw.dev/.well-known/jwt-vc-issuer';
 const CREDENTIAL_ISSUER_METADATA = 'https://issuer.eudiw.dev/.well-known/openid-credential-issuer';
 const EU_LOTL = 'https://ec.europa.eu/tools/lotl/eu-lotl.xml';
-
-/**
- * The extensions path validation here reads, and may therefore see marked
- * critical without breaking RFC 5280 §6.1.4 (o): basic constraints, key usage,
- * subject alternative name, name constraints, extended key usage, and the four
- * policy extensions. Anything else marked critical is an extension this project
- * ignores when the certificate insisted it be understood.
- */
-const PROCESSED_EXTENSIONS = new Set([
-  '2.5.29.19',
-  '2.5.29.15',
-  '2.5.29.17',
-  '2.5.29.30',
-  '2.5.29.37',
-  '2.5.29.32',
-  '2.5.29.33',
-  '2.5.29.36',
-  '2.5.29.54',
-]);
 
 /** Prefix every failure, so CI output says what kind of failure it is. */
 const news = (what: string, then: string) =>
@@ -250,7 +232,7 @@ describe('the live trusted lists', { skip }, () => {
     const unbounded: string[] = [];
     const lapsed: string[] = [];
     const unimplementedForms = new Set<string>();
-    const criticalAndIgnored = new Set<string>();
+    const criticalAndRejected = new Set<string>();
     const anchors: X509Certificate[] = [];
     const unreachable: string[] = [];
 
@@ -305,14 +287,15 @@ describe('the live trusted lists', { skip }, () => {
           }
         }
 
-        // Which extensions are marked critical, and how many of those this
-        // project would have to reject under RFC 5280 §6.1.4 (o). SECURITY.md
-        // names the gap and bounds it by this measurement, so a new critical
-        // extension appearing is the news that widens it.
+        // Which extensions are marked critical that RFC 5280 §6.1.4 (o) now
+        // makes this project *reject*. Measured against the library's own set
+        // rather than a copy of it: a hand-maintained list here would drift
+        // from the rule it claims to be measuring, and agreeing with itself is
+        // exactly the failure mode a drift test cannot have.
         for (const extension of AsnConvert.parse(entry.certificate.raw, Certificate).tbsCertificate
           .extensions ?? []) {
-          if (extension.critical && !PROCESSED_EXTENSIONS.has(extension.extnID)) {
-            criticalAndIgnored.add(extension.extnID);
+          if (extension.critical && !RECOGNISED_CRITICAL_EXTENSIONS.has(extension.extnID)) {
+            criticalAndRejected.add(extension.extnID);
           }
         }
 
@@ -406,11 +389,11 @@ describe('the live trusted lists', { skip }, () => {
     );
 
     assert.deepEqual(
-      [...criticalAndIgnored],
+      [...criticalAndRejected],
       ['2.5.29.16'],
       news(
-        `The extensions marked critical but not processed here are now [${[...criticalAndIgnored].join(', ')}], not [2.5.29.16 privateKeyUsagePeriod].`,
-        'RFC 5280 §6.1.4 (o) says a certificate whose critical extension we do not process must be rejected, and SECURITY.md bounds that gap by this exact list. A new OID here widens it — decide whether to process the extension or to start rejecting, and correct the measurement in REPRODUCE.md either way.',
+        `The critical extensions this project does not process are now [${[...criticalAndRejected].join(', ')}], not [2.5.29.16 privateKeyUsagePeriod].`,
+        'RFC 5280 §6.1.4 (o) is enforced, so this list is no longer a gap to be bounded — it is the set of certificates a deployment now REJECTS. A new OID here means chains that validated yesterday stop validating: decide whether to process that extension, and correct the measurement in REPRODUCE.md either way.',
       ),
     );
 

@@ -73,6 +73,11 @@ failure mode means adding or reusing a code, not a new error string.
   DER by `key-usage.ts`, `name-constraints.ts`, `policies.ts` and `basic-constraints.ts`. The
   §6.1 policy state machine on top of them is `policy-tree.ts` — a tree and three counters,
   because "is this policy asserted" is not the question a policy answers.
+  `critical-extensions.ts` is the inverse of all of them: not "does the certificate satisfy this"
+  but "was anything on it left unread" (§6.1.4 (o)). Its `RECOGNISED_CRITICAL_EXTENSIONS` set is
+  the security-relevant part — every OID on it asserts that code elsewhere acts on that extension,
+  so adding one without the processing silently reopens the hole. A test pins the set for exactly
+  that reason.
 - `@sd-jwt/*` requires the KB-JWT `aud` to exist but never compares it to the verifier's own
   identifier. `src/verify.ts` checks it explicitly, twice (before and after library verification).
   Key binding is verified only when a nonce is supplied, which is why `verifyCredential` throws
@@ -89,12 +94,11 @@ failure mode means adding or reusing a code, not a new error string.
 ### Deliberate simplifications
 
 The gaps listed under "Spec-compliant vs simplified" in the README and in `SECURITY.md` are
-decisions, not oversights: path validation short of RFC 5280 §6.1.4 (o) (Name Constraints,
-certificate policies and `pathLenConstraint` *are* enforced, via `@peculiar/asn1-x509` for the DER
-— crypto stays on `node:crypto`; what remains is that an unrecognised **critical** extension is
-ignored rather than rejected), trust lists not fully TS 119 615 (service status history and
+decisions, not oversights: trust lists not fully TS 119 615 (service status history and
 validity-time evaluation *are* implemented; qualifiers and `Sie` extensions are not), in-memory
-sessions in the demo, ES256 only.
+sessions in the demo, ES256 only. Path validation is no longer among them — it implements RFC 5280
+§6.1 in full, Name Constraints, certificate policies, `pathLenConstraint` and §6.1.4 (o) included,
+via `@peculiar/asn1-x509` for the DER while crypto stays on `node:crypto`.
 
 Where RFC 5280 and RFC 5937 disagree about the trust anchor, this codebase follows 5937 and says
 so: an anchor's Name Constraints, `policyConstraints`, `inhibitAnyPolicy` and `pathLenConstraint`

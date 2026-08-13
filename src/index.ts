@@ -40,6 +40,13 @@ export {
 export type { Pointer, TrustListOptions, TrustListResult } from './trust/lotl.ts';
 export { resolveIssuerCertificateChain, resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
 export type { PathValidationOptions, ResolvedIssuer } from './trust/issuer-key.ts';
+// RFC 5280 §6.1.4 (o). The set is exported to be *read*: it is the list of
+// extensions this library claims to act on, and a caller deciding whether that
+// is enough for their trust decision should not have to take it on faith.
+export {
+  RECOGNISED_CRITICAL_EXTENSIONS,
+  unrecognisedCriticalExtensions,
+} from './trust/critical-extensions.ts';
 // Certificate policies (RFC 5280 §6.1): reachable from PathValidationOptions,
 // so the type is public even though the state machine behind it is not.
 export type { CertificatePolicyOptions } from './trust/policy-tree.ts';

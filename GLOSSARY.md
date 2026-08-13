@@ -399,6 +399,18 @@ the EU PID Issuer CA and 692 of the 1165 CAs on the live trusted lists say.
 Distinct from a verifier's own cap on how long a chain it will look at.
 **(used here — both)**
 
+**Critical extension** — the boolean every X.509 extension carries (**RFC 5280
+§4.2**), by which a CA says *this changes what the certificate means, and you
+may not use it without understanding me*. §6.1.4 (o) is the other half: a
+validator meeting a critical extension it does not process must reject the
+certificate rather than proceed without it. Skipping one does not validate a
+weaker path, it validates a *different certificate* from the one the CA issued —
+the ignored extension may have been narrowing it to a purpose this is not.
+Non-critical is the opposite statement: use this if you understand it. Six
+extensions are ever marked critical across the live trusted lists. **(used here
+— enforced below the trust anchor, against an explicit recognised set; see the
+README)**
+
 **AIA** — Authority Information Access, an X.509 extension (**RFC 5280
 §4.2.2.1**). Its *CA Issuers* URI is where you fetch an issuing CA that was not
 included in `x5c`; its *OCSP* URI names the responder to ask about the
