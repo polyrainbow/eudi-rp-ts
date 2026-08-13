@@ -169,6 +169,34 @@ describe('mdoc through the OID4VP response handler', () => {
     assert.match(result.detail, /validUntil/);
   });
 
+  it('checks the disclosed elements against the query on this path too', async () => {
+    // The reference PID carries no `age_over_18`, so a query demanding it —
+    // no claim_sets, so every listed claim is required — is one this credential
+    // cannot answer. The check has to reach the mdoc branch: `claims` is a
+    // namespace map here, and a path is `[namespace, element]` (§7.2).
+    const demanding = {
+      ...context,
+      query: {
+        credentials: [
+          {
+            id: AGE_OVER_18_MDOC_QUERY_ID,
+            format: 'mso_mdoc' as const,
+            meta: { doctype_value: PID_MDOC_NAMESPACE },
+            claims: [{ path: [PID_MDOC_NAMESPACE, 'age_over_18'] }],
+          },
+        ],
+      },
+    };
+    const result = await verifyPresentationResponse(demanding, {
+      vp_token: { [AGE_OVER_18_MDOC_QUERY_ID]: [present()] },
+      state: 'st',
+    });
+
+    assert.equal(result.verified, false);
+    assert.equal(result.reason, 'REQUESTED_CLAIMS_MISSING');
+    assert.match(result.detail, /age_over_18/);
+  });
+
   it('refuses a response answering neither', async () => {
     const result = await verifyPresentationResponse(context, {
       vp_token: { something_else: ['x'] },

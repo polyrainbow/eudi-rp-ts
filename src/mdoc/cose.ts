@@ -1,6 +1,6 @@
 import { type KeyObject, createPublicKey } from 'node:crypto';
 import { type JwsAlg, verifyJws } from '../crypto.ts';
-import { decode, encode, entriesOf, get, toBytes } from './cbor.ts';
+import { decodeCbor, encode, entriesOf, get, toBytes } from './cbor.ts';
 
 /**
  * COSE_Sign1 verification, enough for mdoc.
@@ -70,7 +70,7 @@ export function parseCoseSign1(value: unknown): CoseSign1 {
   return {
     protectedBytes,
     // An empty protected header encodes as a zero-length string, not as a map.
-    protectedHeader: protectedBytes.length === 0 ? new Map() : (decode(protectedBytes) as Map<number, unknown>),
+    protectedHeader: protectedBytes.length === 0 ? new Map() : (decodeCbor(protectedBytes) as Map<number, unknown>),
     unprotectedHeader: array[1],
     payload: array[2] === null || array[2] === undefined ? null : toBytes(array[2]),
     signature: toBytes(array[3]),

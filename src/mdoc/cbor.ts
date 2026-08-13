@@ -13,6 +13,33 @@ export type CborValue = unknown;
 /** A CBOR tag as `cbor2` surfaces it. Tag 24 wraps embedded CBOR. */
 export const TAG_EMBEDDED_CBOR = 24;
 export const TAG_DATE_TIME = 0;
+/** RFC 8943 `full-date`: a text string `YYYY-MM-DD`, with no time and no zone. */
+export const TAG_FULL_DATE = 1004;
+
+/**
+ * Decode CBOR, keeping `full-date` a date.
+ *
+ * `cbor2` decodes tags 0, 1 and 1004 alike to a JS `Date`, which turns
+ * ISO 18013-5's `birth_date` — a full-date, tag 1004, no time of day anywhere
+ * in it — into an instant at midnight UTC. Every reader downstream then has to
+ * know to cut the time back off, and the one that forgets compares a birth date
+ * against a timestamp in a different zone and is wrong by a day near midnight.
+ *
+ * So the tag is decoded to the string it wraps (RFC 8943 §2: the content is a
+ * text string in the `full-date` production), and `tdate` — `issuance_date`,
+ * `expiry_date`, tag 0 — stays a `Date`, because those genuinely are instants.
+ *
+ * Passed per call rather than through `Tag.registerDecoder`, which is a global
+ * registry: this library must not change how CBOR decodes for everything else
+ * sharing the process.
+ */
+const TAG_DECODERS = new Map<number, (tag: { contents: unknown }) => unknown>([
+  [TAG_FULL_DATE, (tag) => tag.contents],
+]);
+
+export function decodeCbor(bytes: Uint8Array): unknown {
+  return decode(bytes, { tags: TAG_DECODERS as never });
+}
 
 export function get(container: unknown, key: string | number): unknown {
   if (container instanceof Map) return container.get(key);
@@ -46,7 +73,7 @@ export function decodeEmbedded(value: unknown): unknown {
   if (!(bytes instanceof Uint8Array)) {
     throw new Error('Expected embedded CBOR byte string');
   }
-  return decode(bytes);
+  return decodeCbor(bytes);
 }
 
 /**
@@ -82,4 +109,4 @@ export function encodeTag24(contents: Uint8Array): Uint8Array {
   return Uint8Array.from([0xd8, 0x18, ...header, ...contents]);
 }
 
-export { decode, encode };
+export { encode };

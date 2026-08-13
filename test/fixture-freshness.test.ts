@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import type { TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { decode, get, toBytes, untag } from '../src/mdoc/cbor.ts';
+import { decodeCbor as decode, get, toBytes, untag } from '../src/mdoc/cbor.ts';
 import { parseCoseSign1 } from '../src/mdoc/cose.ts';
 
 /**

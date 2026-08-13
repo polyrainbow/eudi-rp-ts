@@ -146,6 +146,34 @@ which is right for the EUDI PID, where they coincide, and wrong for an ISO mDL,
 where the doc type is `org.iso.18013.5.1.mDL` and the namespace is
 `org.iso.18013.5.1`.
 
+### Reading the answer
+
+A DCQL claims path is a pointer over both formats (OID4VP 1.0 §7): a string
+selects an object member, a number an array index, `null` every element of an
+array, and §7.2 maps it onto mdoc as `[namespace, element]`. `selectClaims` and
+`readClaim` walk it, so the pointer that asked for a claim is the one that reads
+it:
+
+```ts
+import { readClaim, selectClaims } from '@sauseschritt/eudi-rp-ts';
+
+readClaim(credential.claims, ['age_equal_or_over', '18']);        // SD-JWT VC
+readClaim(credential.claims, ['eu.europa.ec.eudi.pid.1', 'birth_date']);  // mdoc
+selectClaims(credential.claims, ['nationalities', null]);         // every element
+```
+
+`readClaim` returns undefined when a path selects nothing *or* several; use
+`selectClaims` where several is the point.
+
+**A verified credential is checked against the claims its query asked for** —
+`REQUESTED_CLAIMS_MISSING` if a required claim was not disclosed, or if one
+carries a value the query's `values` excluded. That is distinct from
+`PREDICATE_*` and the distinction is who fell short: this is the wallet
+answering something other than what was asked, before any rule of yours has run.
+Without it, a caller with no predicate is handed `verified: true` beside
+`claims.given_name === undefined`, with nothing to separate a wallet that
+withheld the claim from a holder who never had it.
+
 ### Asking your own question
 
 The two calls above verify one credential you already hold. Over OpenID4VP you
@@ -284,6 +312,14 @@ Both are implemented, `age_equal_or_over.18` preferred when present.
 — not flat `age_over_NN` claims. So the DCQL query asks for the path
 `["age_equal_or_over", "18"]`, and a wallet that discloses that property alone
 reveals nothing else. A test asserts the verifier learns nothing more.
+
+**Dates keep their type.** ISO 18013-5 encodes `birth_date` as an RFC 8943
+`full-date` (CBOR tag 1004) and `validityInfo` as `tdate` (tag 0), and `cbor2`
+decodes both to a JS `Date` — turning a birth date into an instant at midnight
+UTC. `decodeCbor` decodes tag 1004 to the `YYYY-MM-DD` string it wraps, so
+`birth_date` reads as a date and the MSO's validity still reads as a timestamp.
+Without that every reader downstream has to know to cut the time back off, and
+the one that forgets is wrong by a day near midnight.
 
 ## Spec-compliant vs simplified
 

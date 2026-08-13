@@ -45,6 +45,18 @@ export type ReasonCode =
   | 'KEY_BINDING_INVALID'
   | 'KEY_BINDING_NONCE_MISMATCH'
   | 'KEY_BINDING_AUDIENCE_MISMATCH'
+  /**
+   * The credential verified, but does not carry the claims its Credential Query
+   * asked for — or carries one with a value the query said it would not accept
+   * (OID4VP 1.0 §6.3, §6.4.1).
+   *
+   * Distinct from `PREDICATE_*`, and the distinction is who fell short: this is
+   * the wallet answering something other than what was asked, before any rule
+   * of the caller's has been applied. A predicate rejection means the answer
+   * arrived intact and did not satisfy the verifier's rule. Reporting one as
+   * the other sends an operator to argue with a holder about a wallet bug.
+   */
+  | 'REQUESTED_CLAIMS_MISSING'
   // The predicate we were asked to prove
   | 'PREDICATE_CLAIM_MISSING'
   | 'PREDICATE_NOT_SATISFIED'

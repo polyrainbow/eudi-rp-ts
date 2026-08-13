@@ -7,7 +7,7 @@ import { type PathValidationOptions, resolveIssuerCertificateChain } from '../tr
 import { checkChainRevocation, revocationRejection, revocationVia } from '../trust/revocation.ts';
 import { type EventSink, noopSink } from '../events.ts';
 import { type StatusListReference, checkStatusList } from '../trust/status.ts';
-import { decode, decodeEmbedded, encodeTag24, entriesOf, get, toBytes, untag } from './cbor.ts';
+import { decodeCbor, decodeEmbedded, encodeTag24, entriesOf, get, toBytes, untag } from './cbor.ts';
 import { coseAlg, coseX5Chain, parseCoseSign1, verifyCoseSign1 } from './cose.ts';
 
 /**
@@ -132,7 +132,7 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
       typeof options.issuerSigned === 'string'
         ? new Uint8Array(Buffer.from(options.issuerSigned, 'base64url'))
         : options.issuerSigned;
-    issuerSigned = decode(bytes);
+    issuerSigned = decodeCbor(bytes);
   } catch (error) {
     return rejectWith(reject('CREDENTIAL_MALFORMED', `Cannot decode IssuerSigned CBOR: ${String(error)}`));
   }
@@ -195,7 +195,7 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
   }
   let mso: unknown;
   try {
-    mso = decodeEmbedded(untag(decode(sign1.payload)));
+    mso = decodeEmbedded(untag(decodeCbor(sign1.payload)));
   } catch (error) {
     return rejectWith(reject('CREDENTIAL_MALFORMED', `Cannot decode MobileSecurityObject: ${String(error)}`));
   }
@@ -382,7 +382,7 @@ function checkDigests(
       let item: unknown;
       try {
         itemBytes = toBytes(untag(tagged));
-        item = decode(itemBytes);
+        item = decodeCbor(itemBytes);
       } catch (error) {
         return reject('CREDENTIAL_MALFORMED', `Unreadable IssuerSignedItem: ${String(error)}`);
       }

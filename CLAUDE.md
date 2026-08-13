@@ -76,6 +76,18 @@ which `vp_token` keys arrived. The second is the general form of a check that us
 "answers both credential queries; expected one": a credential the query offered an alternative to
 is one the verifier had no basis to receive, and verifying it is the act of collecting it.
 
+Per credential, and only after it verifies, `unsatisfiedClaims` (`oid4vp/claims.ts`) checks that
+what was disclosed is what the Credential Query asked for — §6.4.1 for `claims` and `claim_sets`,
+§6.3 for `values` — and rejects with `REQUESTED_CLAIMS_MISSING`. The age predicate used to cover
+this by accident, being the only thing that noticed a missing claim; a caller with no predicate got
+`verified: true` beside an `undefined` claim. `REQUESTED_CLAIMS_MISSING` is deliberately not a
+`PREDICATE_*` code: one says the wallet answered something else, the other that the answer arrived
+and the caller's rule said no.
+
+`selectClaims`/`readClaim` in the same file walk a DCQL claims path (§7) over either format, which
+is what `PresentedCredential.claims` keeping each format's own structure is for: §7.2 makes an mdoc
+path `[namespace, element]`, so a two-step walk over the namespace map is the whole mapping.
+
 ### Reason codes are derived from state, never from error text
 
 Every rejection path ends at exactly one `ReasonCode` (`src/result.ts`), returned as
@@ -136,6 +148,13 @@ and OCSP over the *issuer's certificates*. Both are on by default and fail close
 revocation is a separate async step rather than part of path validation because
 `resolveIssuerCertificateChain` must stay synchronous — `@sd-jwt`'s `statusVerifier` callback has
 nowhere to await, so the check runs against the chain that call returned.
+
+CBOR dates carry a type and it has to survive decoding. `cbor2` renders RFC 8943 tag 1004
+(`full-date`, what ISO 18013-5 uses for `birth_date`) and tag 0 (`tdate`, `validityInfo`) alike as a
+JS `Date`, which silently promotes a birth date to an instant at midnight UTC. `decodeCbor` in
+`mdoc/cbor.ts` is the only decode entry point in the mdoc path for that reason, and passes its tag
+decoders per call — `Tag.registerDecoder` is a global registry, and this library must not change
+how CBOR decodes for everything else in the process.
 
 Interop workarounds are named as workarounds and default to strict —
 `tolerateMalformedMdocValidity` exists because the EU reference issuer emits a `validUntil` that is

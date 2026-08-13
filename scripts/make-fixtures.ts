@@ -18,7 +18,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { StatusList, createHeaderAndPayload } from '@owf/token-status-list';
 import { base64urlEncode, hasher } from '../src/crypto.ts';
-import { decode, encode, encodeTag24 } from '../src/mdoc/cbor.ts';
+import { decodeCbor as decode, encode, encodeTag24 } from '../src/mdoc/cbor.ts';
 
 x509.cryptoProvider.set(webcrypto as never);
 

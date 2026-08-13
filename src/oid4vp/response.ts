@@ -7,6 +7,7 @@ import { type CredentialFormat, type EventSink, noopSink, withoutVerdict } from 
 import type { TrustAnchors } from '../trust/anchors.ts';
 import { type VerifiedCredential, verifySdJwtVc } from '../verify.ts';
 import { createDecryptJwe, createVerifyJwt, generateRandom, hashCallback } from './callbacks.ts';
+import { unsatisfiedClaims } from './claims.ts';
 import {
   type CredentialQuery,
   type DcqlQuery,
@@ -277,6 +278,19 @@ export async function verifyPresentationResponse<T = undefined>(
           ? await verifySdJwtVcPresentation(context, credentialQuery, presentation, innerEvents)
           : await verifyMdocPresentation(context, credentialQuery, presentation, innerEvents);
       if (!verified.verified) return rejectWith(verified, credentialQuery.format);
+
+      // Only now can this be asked: the claims have to have been verified
+      // before "was this disclosed" is a question about anything. A credential
+      // that verifies without carrying what the query asked for is a wallet
+      // answering something else, and saying so here is what keeps a caller
+      // with no predicate from reading `undefined` off an accepted result.
+      const missing = unsatisfiedClaims(credentialQuery, verified.value.claims);
+      if (missing) {
+        return rejectWith(
+          reject('REQUESTED_CLAIMS_MISSING', `"${queryId}": ${missing}`),
+          credentialQuery.format,
+        );
+      }
 
       credentials.push(verified.value);
       (byQueryId[queryId] ??= []).push(verified.value);

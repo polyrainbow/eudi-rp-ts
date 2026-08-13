@@ -1,5 +1,5 @@
 import { createPrivateKey, sign as nodeSign } from 'node:crypto';
-import { decode, encode, encodeTag24, get } from '../src/mdoc/cbor.ts';
+import { decodeCbor as decode, encode, encodeTag24, get } from '../src/mdoc/cbor.ts';
 
 /**
  * A minimal mdoc wallet, for testing device authentication.

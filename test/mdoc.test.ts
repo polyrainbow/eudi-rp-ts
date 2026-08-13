@@ -3,7 +3,7 @@ import { X509Certificate } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { decode, encode, get } from '../src/mdoc/cbor.ts';
+import { decodeCbor as decode, encode, get } from '../src/mdoc/cbor.ts';
 import { coseAlg, coseX5Chain, parseCoseSign1, verifyCoseSign1 } from '../src/mdoc/cose.ts';
 import { buildSessionTranscript, jwkThumbprint } from '../src/mdoc/session-transcript.ts';
 import { verifyDeviceResponse } from '../src/mdoc/device-response.ts';
@@ -48,6 +48,24 @@ describe('mdoc from the EU reference issuer', () => {
     const elements = result.value.claims['eu.europa.ec.eudi.pid.1']!;
     assert.equal(elements['family_name'], 'Tester');
     assert.equal(elements['given_name'], 'Test');
+  });
+
+  it('keeps a full-date a date, and a timestamp a timestamp', async () => {
+    // `cbor2` decodes RFC 8943 tag 1004 to a JS Date like any other date tag,
+    // which turns `birth_date` into an instant at midnight UTC — a reader that
+    // then compares it against a local timestamp is wrong by a day near
+    // midnight. `decodeCbor` keeps the tag's own string instead.
+    const result = await verifyMdoc(base);
+    assert.equal(result.verified, true, JSON.stringify(result));
+
+    const elements = result.value.claims['eu.europa.ec.eudi.pid.1']!;
+    assert.equal(elements['birth_date'], '1990-06-12');
+    assert.equal(elements['expiry_date'], '2026-11-09');
+
+    // The MSO's own validity is `tdate` (tag 0) and genuinely is an instant,
+    // which is the half of the distinction that has to survive.
+    assert.ok(result.value.validity.validFrom instanceof Date);
+    assert.notEqual(result.value.validity.validFrom.getUTCHours(), 0);
   });
 
   it('is rejected against unrelated trust anchors', async () => {

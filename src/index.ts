@@ -123,6 +123,9 @@ export {
   queryFormats,
   unsatisfiedRequirement,
 } from './oid4vp/query.ts';
+// Reading a response with the claims path that asked for it (OID4VP 1.0 §7),
+// and checking that the wallet disclosed what the query required.
+export { readClaim, selectClaims, unsatisfiedClaims } from './oid4vp/claims.ts';
 export type {
   ClaimsPath,
   ClaimsQuery,

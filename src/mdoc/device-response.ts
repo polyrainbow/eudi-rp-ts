@@ -5,7 +5,7 @@ import { DEFAULT_ALLOWED_ALGS, type JwsAlg } from '../crypto.ts';
 import type { TtlCache } from '../fetching.ts';
 import type { TrustAnchors } from '../trust/anchors.ts';
 import type { PathValidationOptions } from '../trust/issuer-key.ts';
-import { decode, encode, encodeTag24, get, toBytes, untag } from './cbor.ts';
+import { decodeCbor, encode, encodeTag24, get, toBytes, untag } from './cbor.ts';
 import { coseAlg, coseKeyToPublicKey, parseCoseSign1, verifyCoseSign1 } from './cose.ts';
 import { type VerifiedMdoc, verifyMdoc } from './verify.ts';
 
@@ -89,7 +89,7 @@ export async function verifyDeviceResponse(
       typeof options.deviceResponse === 'string'
         ? new Uint8Array(Buffer.from(options.deviceResponse, 'base64url'))
         : options.deviceResponse;
-    response = decode(bytes);
+    response = decodeCbor(bytes);
   } catch (error) {
     return rejectWith(reject('CREDENTIAL_MALFORMED', `Cannot decode DeviceResponse: ${String(error)}`));
   }
@@ -311,8 +311,8 @@ async function verifyDeviceAuth(
 
 function readDeviceNameSpaces(tagged: Uint8Array): Record<string, Record<string, unknown>> {
   try {
-    const inner = decode(tagged);
-    const namespaces = decode(toBytes(untag(inner)));
+    const inner = decodeCbor(tagged);
+    const namespaces = decodeCbor(toBytes(untag(inner)));
     const result: Record<string, Record<string, unknown>> = {};
     for (const [ns, elements] of Object.entries(namespaces as Record<string, unknown>)) {
       result[ns] = elements as Record<string, unknown>;

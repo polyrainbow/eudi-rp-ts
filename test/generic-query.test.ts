@@ -301,6 +301,75 @@ describe('the response has to answer the query, and no more', () => {
     assert.equal(outcome.verified, true, JSON.stringify(outcome));
   });
 
+  it('rejects a credential that verifies without the claims asked for', async () => {
+    // The gap the age predicate used to cover by accident. Without this the
+    // caller is handed `verified: true` beside `claims.family_name === undefined`
+    // and nothing distinguishes a wallet that withheld it from a holder who
+    // never had it.
+    const { outcome } = await roundTrip(NAME_QUERY, async (parts) => ({
+      holder_name: [await disclose({ given_name: true })(parts)],
+    }));
+
+    assert.equal(outcome.verified, false);
+    assert.equal(outcome.reason, 'REQUESTED_CLAIMS_MISSING');
+    assert.match(outcome.detail, /family_name/);
+  });
+
+  it('separates that from a predicate the answer failed', async () => {
+    // Both mean "no", and the difference is who fell short: the wallet answered
+    // something else, or it answered and the verifier's own rule said no.
+    const query: DcqlQuery = {
+      credentials: [{ ...RESIDENCE_CREDENTIAL, claims: [{ path: ['issuing_country'] }] }],
+    };
+    const notHere: PresentationPredicate<undefined> = () =>
+      reject('PREDICATE_NOT_SATISFIED', 'wrong country');
+
+    const { outcome } = await roundTrip<undefined>(
+      query,
+      async (parts) => ({ residence: [await disclose({ issuing_country: true })(parts)] }),
+      { predicate: notHere },
+    );
+
+    assert.equal(outcome.verified, false);
+    assert.equal(outcome.reason, 'PREDICATE_NOT_SATISFIED');
+  });
+
+  it('enforces the values a claims query restricted a claim to', async () => {
+    const query: DcqlQuery = {
+      credentials: [
+        { ...RESIDENCE_CREDENTIAL, claims: [{ path: ['issuing_country'], values: ['PT'] }] },
+      ],
+    };
+    const { outcome } = await roundTrip(query, async (parts) => ({
+      residence: [await disclose({ issuing_country: true })(parts)],
+    }));
+
+    assert.equal(outcome.verified, false);
+    assert.equal(outcome.reason, 'REQUESTED_CLAIMS_MISSING');
+  });
+
+  it('accepts a claim set option the wallet could satisfy', async () => {
+    // The age query's shape, without the age: two ways to answer, ranked, and
+    // the wallet takes the one it holds.
+    const query: DcqlQuery = {
+      credentials: [
+        {
+          ...NAME_CREDENTIAL,
+          claims: [
+            { id: 'full', path: ['family_name'] },
+            { id: 'country', path: ['issuing_country'] },
+          ],
+          claim_sets: [['full'], ['country']],
+        },
+      ],
+    };
+    const { outcome } = await roundTrip(query, async (parts) => ({
+      holder_name: [await disclose({ issuing_country: true })(parts)],
+    }));
+
+    assert.equal(outcome.verified, true, JSON.stringify(outcome));
+  });
+
   it('refuses a second presentation where one was requested', async () => {
     const { outcome } = await roundTrip(NAME_QUERY, async (parts) => ({
       holder_name: [await disclose(NAME_FRAME)(parts), await disclose(NAME_FRAME)(parts)],

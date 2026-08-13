@@ -82,7 +82,10 @@ export function evaluateAgeOver18Mdoc(
 
   const birthDate = elements['birth_date'];
   if (typeof birthDate === 'string') {
-    // mdoc full-dates may arrive as a tagged date already rendered to ISO.
+    // `YYYY-MM-DD` already: `decodeCbor` keeps RFC 8943 tag 1004 a full-date
+    // rather than letting it become an instant at midnight. The slice is for an
+    // issuer that emits a date-time where the rulebook says full-date, which is
+    // still a birth date and still answers the question.
     return evaluateAgeOver18SdJwt({ birthdate: birthDate.slice(0, 10) }, now);
   }
 
