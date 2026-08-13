@@ -49,9 +49,6 @@ export const MIN_RSA_MODULUS_BITS = 2048;
 /** Default policy: what the EUDI reference infrastructure actually uses. */
 export const DEFAULT_ALLOWED_ALGS: readonly JwsAlg[] = ['ES256'];
 
-/** @deprecated use DEFAULT_ALLOWED_ALGS; retained so existing callers compile. */
-export const ALLOWED_JWS_ALG = 'ES256' as const;
-
 export function isSupportedAlg(alg: unknown): alg is JwsAlg {
   return typeof alg === 'string' && alg in SUPPORTED_JWS_ALGS;
 }
