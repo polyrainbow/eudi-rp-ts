@@ -33,7 +33,7 @@ once already. Private key material belongs in `config/`, which is gitignored.
 
 `src/` is the library, `app/` is a demo that consumes it. The boundary is load-bearing:
 **the library reads no configuration, opens no ports and logs nothing.** `app/config.ts` is the
-only file in the repo that touches `process.env`. Do not introduce env reads, `console.*` or
+only file outside `scripts/` that touches `process.env`. Do not introduce env reads, `console.*` or
 ambient state into `src/`.
 
 `src/index.ts` is the public API surface. Anything not exported there is a deep import and not

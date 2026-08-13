@@ -1,6 +1,6 @@
 # eudi-rp-ts
 
-A minimal EU Digital Identity relying party in Node/TypeScript. It proves one
+An EU Digital Identity relying party in Node/TypeScript. It proves one
 predicate — **age over 18** — from an SD-JWT VC or an ISO 18013-5 mdoc, over
 OpenID4VP. Both formats have verified a PID presented by the EUDI reference
 wallet.
@@ -19,7 +19,7 @@ Node runs the TypeScript as-is.
 
 ```bash
 npm install
-npm test                      # 323 tests, fully offline
+npm test                      # the whole suite, fully offline
 RUN_NETWORK_TESTS=1 npm test  # also verifies the live EU trust lists
 npm start                     # http://localhost:3000
 ```
@@ -43,9 +43,9 @@ are easy to confuse.
 
 ```
 browser  ──POST /presentations─────▶  build OID4VP request  ──▶  QR + deep link
-wallet   ──GET  /oid4vp/request/:id─▶  signed request object (x509_san_dns only)
+wallet   ──GET  /oid4vp/request/:id─▶  signed request object (both x509 modes)
 wallet   ──POST /oid4vp/response/:id▶  ① protocol envelope   (@openid4vc/openid4vp)
-                                     ② credential          (src/verify.ts)
+                                     ② credential          (src/verify.ts | src/mdoc/)
 browser  ──GET  /presentations/:id─▶  verified / rejected + reason code
 ```
 
@@ -59,17 +59,22 @@ switch on a code and never parse an error string.
 
 `src/` is the library and `app/` is a demo that consumes it. The library reads
 no configuration, opens no ports and logs nothing; `app/config.ts` is the only
-file that touches `process.env`.
+file outside `scripts/` that touches `process.env`.
 
 ```
 src/index.ts              the public API — anything else is a deep import
 src/result.ts             ReasonCode and the Outcome type
 src/crypto.ts             algorithm policy, JWS verification, hashing
+src/events.ts             typed audit events; carries no personal data
+src/fetching.ts           outbound HTTP policy: deadline, size cap, TTL cache
 src/verify.ts             credential verification, orchestration
 src/predicate/age.ts      age_equal_or_over["18"], birthdate
 src/trust/anchors.ts      the trust anchor set
 src/trust/issuer-key.ts   x5c resolution + chain validation   <- the part no library does
 src/trust/policy-tree.ts  RFC 5280 §6.1 certificate policy processing
+src/trust/critical-extensions.ts  §6.1.4 (o) — what we refuse to ignore
+src/trust/{key-usage,name-constraints,policies,basic-constraints}.ts
+                          DER readers for what node:crypto does not expose
 src/trust/lotl.ts         ETSI TS 119 612 trust list client   <- no Node implementation existed
 src/trust/status.ts       Token Status List revocation (the credential)
 src/trust/revocation.ts   CRL and OCSP                 (the issuer's certificates)
@@ -80,7 +85,7 @@ src/mdoc/session-transcript.ts  the OID4VP handover a device signature commits t
 src/oid4vp/identity.ts    who this verifier is on the wire
 src/oid4vp/query.ts       the DCQL query
 src/oid4vp/request.ts     authorization request (+ JAR)
-src/oid4vp/response.ts    response validation, hand-off to src/verify.ts
+src/oid4vp/response.ts    response validation, hand-off to whichever verifier
 src/oid4vp/callbacks.ts   the crypto callbacks @openid4vc/openid4vp requires
 
 app/config.ts             environment -> library options
@@ -147,7 +152,7 @@ deploy it as-is; use the library inside your own service.
 | `WALLET_SCHEME` | `eudi-openid4vp://` | Deep-link scheme. What the live EUDI reference infrastructure emits; its verifier README documents `haip-vp://`. |
 | `CLIENT_ID_PREFIX` | `redirect_uri` | Or `x509_san_dns`, or `x509_hash`. |
 | `CLIENT_DNS_NAME` | — | Required for `x509_san_dns` only; must match a dNSName SAN in the leaf. `x509_hash` needs no name. |
-| `ACCESS_CERT_CHAIN_FILE` / `ACCESS_CERT_KEY_FILE` | — | Required for `x509_san_dns`; signs the request object. |
+| `ACCESS_CERT_CHAIN_FILE` / `ACCESS_CERT_KEY_FILE` | — | Required for **both** x509 modes; signs the request object. Startup fails without them. |
 | `ACCESS_CERT_CHAIN_PEM` / `ACCESS_CERT_KEY_PEM` | — | Same, inline. For hosts with no filesystem for secrets. |
 | `REQUESTED_VCT` | `urn:eudi:pid:1` | Credential type to ask for. |
 | `STATUS_CHECK` | `true` | Verify each credential's status list. Set `false` only for an offline demo. |
@@ -223,8 +228,8 @@ response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 (§14.8); x5c chain signature linkage and certificate validity windows; ETSI TS
 119 612 trust list signature verification, including RSASSA-PSS and ECDSA.
 
-**Certificate path validation is RFC 5280 §6.1 in full**, which it was not
-until recently: validity windows, signature linkage, that every issuing
+**Certificate path validation is RFC 5280 §6.1 in full**: validity windows,
+signature linkage, that every issuing
 certificate is a CA and asserts `keyCertSign` (§6.1.4 (n)), that the leaf
 asserts `digitalSignature` (see below), path length — the caller's limit *and*
 each CA's own `pathLenConstraint` (§6.1.4 (l), (m), see below) — Name
@@ -899,7 +904,10 @@ All handled in `src/`; all easy to get wrong by assuming otherwise.
 - **SD-JWT VC and current EU age verification are diverging.** The dedicated EU
   Age Verification profile (`av-doc-technical-specification`, Annex A) is
   **mdoc-only**: doctype `eu.europa.ec.av.1`, flat `age_over_18`, `redirect_uri`
-  client id, `direct_post`. This project deliberately stays on the SD-JWT VC path.
+  client id, `direct_post`. This project implements the **PID** in both formats;
+  that profile's doctype is not implemented. Note that the PID mdoc carries no
+  `age_over_18` either (REPRODUCE.md section 7), so the flat boolean the AV
+  profile defines is not reachable through the PID in *either* encoding.
 - **`/.well-known/jwt-vc-issuer` is unsupported** by the reference issuer (HTTP
   400, "Not supported"), so `x5c` is the only key-resolution route that works
   against real EU infrastructure today. Only `x5c` is implemented.
@@ -933,10 +941,12 @@ can reach the internet if you use `TRUST_MODE=lotl`.
 
 Serverless platforms (Netlify, Vercel, Lambda) need code changes first: sessions
 live in an in-memory `Map`, so an ephemeral function would answer every
-presentation with `SESSION_UNKNOWN`. `SessionStore` is behind a small interface
-specifically so it can be swapped for a KV store, but that work isn't done.
+presentation with `SESSION_UNKNOWN`. `SessionStore` is a concrete class that
+`createVerifierServer` constructs itself, so swapping it for a KV store means
+editing the server, not implementing an interface — extracting one is the first
+step, and it has not been taken.
 
-Two things to expect on a fresh deployment:
+Three things to expect on a fresh deployment:
 
 - **`TRUST_MODE=pinned` with the demo anchor rejects every real credential** with
   `ISSUER_UNTRUSTED`. That is correct behaviour — the fixture CA is a throwaway.
