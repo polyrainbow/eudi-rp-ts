@@ -1,7 +1,9 @@
 # eudi-rp-ts
 
 A minimal EU Digital Identity relying party in Node/TypeScript. It proves one
-predicate — **age over 18** — from an SD-JWT VC, over OpenID4VP.
+predicate — **age over 18** — from an SD-JWT VC or an ISO 18013-5 mdoc, over
+OpenID4VP. Both formats have verified a PID presented by the EUDI reference
+wallet.
 
 The official EUDI implementations are Kotlin, Swift and Python. The one
 TypeScript repo in the `eu-digital-identity-wallet` org is an Angular UI that
@@ -17,7 +19,7 @@ Node runs the TypeScript as-is.
 
 ```bash
 npm install
-npm test                      # 257 tests, fully offline
+npm test                      # 323 tests, fully offline
 RUN_NETWORK_TESTS=1 npm test  # also verifies the live EU trust lists
 npm start                     # http://localhost:3000
 ```
@@ -971,29 +973,42 @@ still the only way to hear it.
   `PID Issuer CA - UT 02`, issuer signature, disclosure resolution, predicate —
   against a `urn:eudi:pid:1` issued by `backend.issuer.eudiw.dev`.
 - **The EU trust lists parse and verify.** `RUN_NETWORK_TESTS=1 npm test`.
-- **The EUDI reference wallet presents to this verifier.** 2026-08-11, over a
-  public deployment with a registered access certificate. Verified 18-or-over
-  from a `urn:eudi:pid:1` issued by `CN=PID DS - 002`. Unlike the credential
-  above — fetched by driving OID4VCI directly — this one came through a wallet,
-  so it carries a Key Binding JWT. See [REPRODUCE.md](REPRODUCE.md) section 6
-  for the configuration and the two defects it exposed.
+- **The EUDI reference wallet presents to this verifier, in both formats.**
+  2026-08-11 as `dc+sd-jwt` and 2026-08-13 as `mso_mdoc`, over a public
+  deployment with a registered access certificate, both verified 18-or-over from
+  a PID issued by `CN=PID DS - 002`. Unlike the credential above — fetched by
+  driving OID4VCI directly — these came through a wallet, so the SD-JWT one
+  carries a Key Binding JWT and the mdoc one a device signature over the
+  SessionTranscript. The same query offered both alternatives each time; which
+  arrived was the holder's choice in the wallet's credential picker, not a
+  configuration change. The mdoc run also checked the live status list and the
+  CA's CRL, both on by default, and was the first live exercise of the RFC 5280
+  §6.1.4 (o) critical-extension rule. See [REPRODUCE.md](REPRODUCE.md) sections 6
+  and 7 for the configuration, the audit trail, and the three defects the two
+  runs exposed.
 
 **Fetch your own credential and check it**: `npm run fetch-credential -- sd-jwt`
 drives the OID4VCI flow against `issuer.eudiw.dev` and writes a real credential
 you can verify with this library.
 
-Two caveats on the wallet result. The evidence was `birthdate`, not
-`age_equal_or_over.18`: PID Rulebook v1.1 removed the age attributes, so the
-wallet disclosed a full date of birth rather than the boolean — the
-privacy-preserving path is not available against a current reference PID. And
-the wallet answered in `dc+sd-jwt`; the `mso_mdoc` path is still proven only
-against the simulated wallet.
+One caveat on both results, and it is the substantive finding. The evidence was
+`birthdate`, not an age boolean: PID Rulebook v1.1 removed the age attributes
+per CIR 2024/2977, so the holder disclosed a full date of birth. That is true in
+**both** encodings — the reference PID carries no age attribute as SD-JWT VC and
+none as mdoc either, so choosing the mdoc credential does not avoid it. Easy to
+assume otherwise, because the EU's dedicated Age Verification profile is
+mdoc-only and does define a flat `age_over_18` (see "Open questions"); the PID
+is not that profile. Asking "is this person 18" against a current reference PID
+costs you their date of birth whichever format answers.
 
 To repeat it: run `npm run register-rp`, complete the registration chain it
 stops at, and configure `CLIENT_ID_PREFIX=x509_hash` — the issued certificate
 carries a URI SAN rather than a dNSName, so `x509_san_dns` will not work. Point
 `TRUST_ANCHORS_FILE` at `anchors/eudiw-pid-issuer-ca.pem`, set
 `BASE_URL` to your public URL, and `WALLET_SCHEME` to `eudi-openid4vp://`.
+Which format you get is then chosen in the wallet: it offers both credentials it
+holds and you pick one. Nothing in the request needs changing to exercise either
+path.
 
 ### Access certificates
 

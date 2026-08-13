@@ -12,7 +12,8 @@ was **not** done.
 | Verifies the live EU trust lists (LOTL and national lists) | **Reproducible**, `RUN_NETWORK_TESTS=1 npm test` |
 | Full OID4VP round trip over a public deployment | **Reproducible**, against a simulated wallet |
 | mdoc issuer signature, digests and device authentication | **Reproducible** |
-| **Interoperates with the EUDI reference wallet app** | **Reproducible**, 2026-08-11, see section 6 |
+| **Interoperates with the EUDI reference wallet app, SD-JWT VC** | **Reproducible**, 2026-08-11, see section 6 |
+| **Interoperates with the EUDI reference wallet app, mdoc** | **Reproducible**, 2026-08-13, see section 7 |
 
 Every round trip in sections 1–4 uses `test/wallet.ts` or `test/mdoc-wallet.ts`
 — about eighty lines each, written for these tests. They exercise the protocol
@@ -1033,12 +1034,103 @@ consequence of PID Rulebook v1.1 removing the age attributes per CIR 2024/2977,
 observed rather than predicted. A verifier asking "is this person 18" against a
 current reference PID learns exactly when they were born.
 
-`Format: dc+sd-jwt` — the wallet chose SD-JWT VC although it also held the mdoc
-PID that the registration service requires. Both were offered; the mdoc path
-therefore remains proven only against `test/mdoc-wallet.ts`.
+`Format: dc+sd-jwt` — **the holder chose it, not the wallet.** The query offered
+both alternatives and the wallet presented a credential picker; SD-JWT VC was
+selected from it. An earlier version of this sentence said "the wallet chose",
+which put the decision in the software and made the mdoc path look blocked by
+something outside our control. It was a choice on a screen, and section 7 is the
+same run with the other option taken.
 
 Unlike the credential in section 2, this presentation came through a wallet, so
 it carries a Key Binding JWT and the holder-binding path was exercised for real.
+
+## 7. The same wallet presenting the mdoc PID
+
+Done **2026-08-13**, against release v10 of the same deployment — that is, the
+code on `main` today rather than the 2026-08-11 build section 6 used.
+
+The query is unchanged and still offers both alternatives; the only difference
+is which credential was selected in the wallet's picker. That is the whole of
+what stood between section 6 and this: not a missing capability, a menu.
+
+The result, as the page rendered it:
+
+```
+Verified — 18 or over
+Format           mso_mdoc
+Evidence         birthdate
+Credential type  eu.europa.ec.eudi.pid.1
+Issuer           CN=PID DS - 002, organizationIdentifier=LEIEU-123456789,
+                 O=EUDI Wallet Reference Implementation, C=UT
+```
+
+Configuration exactly as section 6, with `STATUS_CHECK` and
+`CERT_REVOCATION_CHECK` unset — so both default to **on** and this run checked
+live revocation at both levels rather than signatures alone.
+
+### The audit trail, read off the deployment
+
+The verification events (`app/audit.ts`, JSON lines on stdout), correlated by
+presentation id and lightly reformatted:
+
+```
+09:18:48.873  presentation.requested     vct=urn:eudi:pid:1  clientIdPrefix=x509_hash
+09:19:03.056  verification.started       format=mso_mdoc
+09:19:03.137  issuer.resolved            format=mso_mdoc  CN=PID DS - 002  chainLength=2
+09:19:03.358  status.checked             outcome=valid  cached=true
+09:19:03.490  issuer.revocation.checked  outcome=good   via=crl
+09:19:03.493  verification.accepted      format=mso_mdoc  credentialType=eu.europa.ec.eudi.pid.1
+                                         evidence=birthdate  durationMs=444
+```
+
+Fourteen seconds between the request and the response is a person reading a
+consent screen. The 444 ms is the verification itself, two live network round
+trips included.
+
+What each line settles:
+
+- **`format=mso_mdoc`** — the claim section 6 could not make. Issuer COSE_Sign1,
+  every element digest, the device signature over the SessionTranscript, and the
+  chain to `PID Issuer CA - UT 02`, all against a real wallet.
+- **`status.checked outcome=valid`** — the mdoc's Token Status List, fetched and
+  signature-verified against the same anchors, live.
+- **`issuer.revocation.checked outcome=good via=crl`** — the document signer's
+  own certificate, checked against the CA's published CRL. `via=crl` and not
+  `ocsp` matches what the reference deployment publishes (see below).
+- **No `credentialType` on `verification.started`.** Not an omission: the doc
+  type lives inside the signed Mobile Security Object and is unreadable until
+  the issuer signature verifies, so the field is `undefined` and `JSON.stringify`
+  drops it. The documented mdoc asymmetry, visible in production.
+- **RFC 5280 §6.1.4 (o) ran against live infrastructure for the first time**, on
+  the credential chain *and* on the status list signer's chain, and rejected
+  neither. The offline measurement said it would cost four certificates across
+  the trusted lists and none in this deployment; that now has a live run behind
+  it rather than only a census.
+
+### `evidence: birthdate` in both formats
+
+Section 6 found the privacy-preserving path unavailable in SD-JWT VC. It is
+unavailable in mdoc too, and for the same reason: the reference PID carries no
+age attribute in either encoding, so `age_over_18` was absent and the predicate
+resolved through `birth_date`.
+
+This is worth stating plainly because the EU's dedicated Age Verification
+profile is mdoc-only and *does* define a flat `age_over_18` (`eu.europa.ec.av.1`
+— see README "Open questions"). It would be easy to assume the mdoc PID
+therefore carries one. It does not. Proving "18 or over" against a current
+reference PID costs the holder a full date of birth in **both** formats, and
+choosing the mdoc credential does not avoid it.
+
+### A defect this run exposed
+
+`status.checked` reported `cached: true` on a fetch that was demonstrably cold —
+it was the first status lookup after a fresh deploy. The field is
+`options.statusCache !== undefined`: it says *a cache was configured*, not *this
+answer came from cache*. Next to a revocation claim that reads as "the status
+was not re-checked", which was false here.
+
+Nothing in the offline suite could catch it — those tests pass a cache or none
+and never ask the event which of the two happened.
 
 ## Observed facts about the reference infrastructure
 
