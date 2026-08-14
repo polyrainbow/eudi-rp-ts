@@ -25,7 +25,10 @@ about where it stops. Before relying on it for anything real, read
   rather than replayed. So is signature *coverage*: `verifyTrustList` returns
   the octets the signature covered and everything downstream parses those, so a
   service added outside the signed reference is absent rather than trusted (XML
-  Signature Wrapping). So are §5.5.9 service information extensions, including
+  Signature Wrapping). A list carrying a document type declaration that could
+  declare an entity is refused before anything parses it, so neither entity
+  expansion nor XXE rests on the XML parser's own defaults. So are §5.5.9
+  service information extensions, including
   `Qualifications` — a service publishing a critical extension this project
   cannot process is dropped rather than trusted, and the qualifiers derived for
   an issuer's certificate are **reported to the caller and never enforced**.

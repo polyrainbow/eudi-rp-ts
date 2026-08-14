@@ -807,6 +807,45 @@ Callers using `parsePointers`, `parseTrustServices` or `parseServiceCertificates
 directly must pass that return value for the same reason; `fetchTrustAnchors`
 already does.
 
+### What a trust list may not make the parser do
+
+The same reasoning one layer down. Wrapping is about which part of a document is
+read; this is about what merely *parsing* one is allowed to cost, and it has the
+same premise — a national list may arrive over plain http, so an on-path
+attacker chooses the bytes.
+
+XML's three classical answers all begin in a document type declaration: an
+internal entity that expands until memory runs out (`&l4;` referring to ten
+`&l3;` and so on down), an external entity that reads `file:///etc/passwd` into
+the element a `TSLLocation` was about to be read from, and an external DTD that
+turns a parse into an outbound request to whoever wrote the list.
+
+`@xmldom/xmldom` 0.9 does none of it — it expands no entity at all and
+dereferences no identifier, leaving `&x;` as three characters of text — so none
+of these is reachable through it today. That is a property of a dependency, of
+the kind a minor release changes without saying so. `parseXml` in
+`src/trust/lotl.ts` is therefore the only way a trust list becomes a document
+here, and it **refuses a declaration that carries an internal subset or an
+external identifier** before anything else looks at the document — including
+before the signature is checked, since `xml-crypto` parses the string again with
+a parser this project does not configure. An entity cannot be declared without
+one or the other, so refusing both is the whole of it, and a trust list needs
+neither: no live list carries a declaration, which `test/ecosystem-drift.test.ts`
+measures rather than assumes. A bare `<!DOCTYPE TrustServiceStatusList>`
+declares nothing and is left alone; the five entities XML defines itself
+(`&amp;` and its siblings) need no declaration and are unaffected.
+
+The declaration is read off the parsed tree, not matched in the string — a
+`<!DOCTYPE` inside a comment or a CDATA section is character data, and a regex
+cannot tell the difference.
+
+`parseXml` also passes its own error handler, because xmldom's default writes
+non-fatal parse errors to `console.error` and **the library logs nothing** — an
+undeclared entity reference is enough to put a string the attacker composed into
+an operator's log from a code path with no business logging at all.
+`test/xml-entities.test.ts` pins each of these separately: what this library
+refuses, and what the parser underneath happens not to do.
+
 ### Trust list freshness
 
 A signature says *who* wrote a list, never *when*. Every list here is fetched

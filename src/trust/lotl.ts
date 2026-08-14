@@ -41,6 +41,47 @@ const TSL_MIME_TYPE = 'application/vnd.etsi.tsl+xml';
 const select = xpath.useNamespaces({ tsl: TSL_NS, ds: DSIG_NS, add: ADDTYPES_NS });
 
 /**
+ * The only way a trust list is turned into a document here.
+ *
+ * Every parse below reads bytes an attacker may have chosen: a national list
+ * may arrive over plain http (see `NATIONAL_LIST_PROTOCOLS`), and the LOTL's
+ * own pointers name locations nobody here controls. Two properties therefore
+ * belong to this function rather than to whatever parser is underneath it.
+ *
+ * **No document type declaration.** `@xmldom/xmldom` 0.9 expands no entities at
+ * all — a declared `&x;` is left as literal text and a `SYSTEM` identifier is
+ * never dereferenced — so neither entity expansion nor XXE is reachable through
+ * it today. That is the dependency's property, not this library's, and it is
+ * the kind a minor release changes silently. An entity cannot be declared
+ * without either an internal subset or an external DTD, so refusing both is the
+ * whole of it, and a trust list has no use for either. A bare `<!DOCTYPE tsl>`
+ * declares nothing and is left alone, which keeps this from refusing a list
+ * over a construct that cannot carry the attack.
+ *
+ * The declaration is read off the parsed document rather than matched in the
+ * string: `<!DOCTYPE` inside a comment or a CDATA section is text, and a regex
+ * cannot tell the difference. Reading it afterwards is safe precisely because
+ * the parser acts on none of it.
+ *
+ * **Silence.** xmldom's default handler writes non-fatal parse errors to
+ * `console.error` — an undeclared entity reference is enough — and this library
+ * logs nothing, least of all a string an attacker composed. Fatal errors still
+ * throw, and a document too broken to describe a trust list is refused by each
+ * caller in its own terms.
+ */
+function parseXml(xml: string, label: string) {
+  const doc = new DOMParser({ onError: () => {} }).parseFromString(xml, 'text/xml');
+  const doctype = doc.doctype;
+  if (doctype && (doctype.internalSubset || doctype.publicId || doctype.systemId)) {
+    throw new Error(
+      `${label}: carries a document type declaration, which a trust list has no use for ` +
+        'and which is where entity declarations live',
+    );
+  }
+  return doc;
+}
+
+/**
  * RSASSA-PSS, which xml-crypto does not ship.
  *
  * Several member states sign with it — Germany's list is `sha256-rsa-MGF1` —
@@ -309,7 +350,7 @@ export function verifyTrustList(
   // development: it disables the wrapping defence with it.
   if (options.skip) return xml;
 
-  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  const doc = parseXml(xml, options.label);
   const signatureNode = (select('//ds:Signature', doc as unknown as Node) as Node[])[0];
   if (!signatureNode) throw new Error(`${options.label}: no XML signature`);
 
@@ -357,7 +398,7 @@ function signedTrustList(signedXml: SignedXml, label: string): string {
   for (const content of signed) {
     let root: { namespaceURI: string | null; localName: string | null } | null = null;
     try {
-      root = new DOMParser().parseFromString(content, 'text/xml').documentElement;
+      root = parseXml(content, label).documentElement;
     } catch {
       // A reference may cover something that is not a document on its own.
       // That is not this one; keep looking.
@@ -415,7 +456,7 @@ export function checkTrustListFreshness(
 
   const now = options.now ?? new Date();
   const skew = (options.clockSkewSeconds ?? 0) * 1000;
-  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  const doc = parseXml(xml, options.label);
   // Anchored at the root rather than `//`: `SchemeInformation` is where the
   // list describes *itself*, and a descendant search would be satisfied by any
   // element of that name a future schema nests somewhere else.
@@ -458,7 +499,7 @@ export function checkTrustListFreshness(
  * authenticate it. See `verifyTrustList`.
  */
 export function parsePointers(xml: string): Pointer[] {
-  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  const doc = parseXml(xml, 'trust list');
   const nodes = select('//tsl:OtherTSLPointer', doc as unknown as Node) as Node[];
 
   return nodes.map((node) => ({
@@ -495,7 +536,7 @@ export function parsePointers(xml: string): Pointer[] {
  * replaced it is granted today.
  */
 export function parseTrustServices(xml: string, serviceTypes: string[]): TrustServiceEntry[] {
-  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  const doc = parseXml(xml, 'trust list');
   const services = select('//tsl:TSPService', doc as unknown as Node) as Node[];
   const entries: TrustServiceEntry[] = [];
 

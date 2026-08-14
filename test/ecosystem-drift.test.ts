@@ -242,6 +242,7 @@ describe('the live trusted lists', { skip }, () => {
     const criticalAndRejected = new Set<string>();
     const anchors: X509Certificate[] = [];
     const unreachable: string[] = [];
+    const withDoctype: string[] = [];
     const criticalServiceExtensions = new Set<string>();
     const serviceExtensionsRefused: string[] = [];
     const publishedQualifiers = new Set<string>();
@@ -258,6 +259,17 @@ describe('the live trusted lists', { skip }, () => {
       }
 
       const document = new DOMParser().parseFromString(xml, 'text/xml');
+
+      // `parseXml` refuses a document type declaration that could carry an
+      // entity, which is only free of cost while no Member State publishes one.
+      // Skipped rather than counted if one does: the library would read nothing
+      // from that list, so folding its services into the totals below would
+      // report anchors no deployment gets.
+      const doctype = document.doctype;
+      if (doctype && (doctype.internalSubset || doctype.publicId || doctype.systemId)) {
+        withDoctype.push(`${pointer.territory} (${doctype.name})`);
+        continue;
+      }
 
       // Freshness, read straight from the document for the same reason as the
       // rest of this loop: what the parser accepted and what is published are
@@ -409,6 +421,15 @@ describe('the live trusted lists', { skip }, () => {
       news(
         `${missingStartingTime} granted services are published without a StatusStartingTime, which this project drops rather than assuming a start.`,
         'those services are now silently absent from the anchor set. Revisit the decision in src/trust/lotl.ts and the measurement in REPRODUCE.md.',
+      ),
+    );
+
+    assert.deepEqual(
+      withDoctype,
+      [],
+      news(
+        `${withDoctype.length} trusted list(s) now carry a document type declaration: ${withDoctype.join(', ')}`,
+        'src/trust/lotl.ts refuses those outright, so those lists contribute no anchors at all. The declaration is refused because it is where entity declarations live and a trust list has no use for one — a Member State publishing a harmless DTD would mean narrowing the rule to internal subsets that actually declare entities, and correcting the "no use for either" argument in README "What the trust list signature covers".',
       ),
     );
 

@@ -138,6 +138,16 @@ failure mode means adding or reusing a code, not a new error string.
   it fetched. Anything reading a trust list must read the returned content: a
   new parse of the fetched XML reopens the hole silently, because the wrapped
   document verifies.
+- `@xmldom/xmldom` expands no entity and dereferences no external identifier —
+  today. That is the dependency's property, not ours, and `parseXml` is where it
+  becomes ours: it is the only way a trust list becomes a document in
+  `lotl.ts`, and it refuses a DOCTYPE carrying an internal subset or an external
+  identifier, which is the only place an entity can be declared. It runs before
+  the signature check, because `xml-crypto` parses the string again with a
+  parser this project does not configure. It also supplies an `onError`, since
+  xmldom's default writes non-fatal parse errors to `console.error` and the
+  library logs nothing. A new `new DOMParser()` anywhere in `src/` gives both
+  properties back.
 - Status list fetching *and* verifying the list's own signature are the relying party's job.
   `src/trust/status.ts` chains it to the same anchors and **fails closed**.
 - Nothing in the tree does CRL or OCSP. `src/trust/revocation.ts` implements both on
