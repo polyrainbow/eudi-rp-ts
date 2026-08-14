@@ -190,7 +190,10 @@ export async function fetchTrustAnchors(
   const lotlAnchors = config.lotlSigningAnchorsPem
     ? TrustAnchors.fromPem(config.lotlSigningAnchorsPem)
     : undefined;
-  verifyTrustList(lotlXml, {
+  // Everything after this reads `signedLotl`, never `lotlXml`: the fetched
+  // document is only a carrier, and the part of it the signature covered is the
+  // part that may be believed. Same below for each national list.
+  const signedLotl = verifyTrustList(lotlXml, {
     ...(lotlAnchors ? { expectedCerts: [...lotlAnchors.certificates] } : {}),
     skip: config.insecureSkipSignatureCheck,
     label: config.lotlUrl,
@@ -198,13 +201,13 @@ export async function fetchTrustAnchors(
   // Before the pointers are read, not after: a stale LOTL names both the
   // locations of the national lists and the certificates that authenticate
   // them, so following it would spread a replayed root through everything below.
-  const lotlFreshness = checkTrustListFreshness(lotlXml, {
+  const lotlFreshness = checkTrustListFreshness(signedLotl, {
     now,
     skip: config.insecureSkipFreshnessCheck ?? false,
     label: config.lotlUrl,
   });
 
-  const pointers = parsePointers(lotlXml).filter(
+  const pointers = parsePointers(signedLotl).filter(
     (pointer) =>
       // The LOTL points at itself; following that would recurse forever.
       pointer.type !== LIST_OF_LISTS &&
@@ -222,7 +225,7 @@ export async function fetchTrustAnchors(
   for (const pointer of wanted) {
     try {
       const xml = await fetchText(doFetch, pointer.url, NATIONAL_LIST_PROTOCOLS);
-      verifyTrustList(xml, {
+      const signed = verifyTrustList(xml, {
         // A national list is authenticated by the certificates the (signed)
         // LOTL published for it. That is the whole point of the LOTL.
         expectedCerts: pointer.signingCerts.map((pem) => new X509Certificate(pem)),
@@ -232,12 +235,12 @@ export async function fetchTrustAnchors(
       // A national list that has lapsed costs that territory's anchors and
       // nothing else: the throw lands in `failures` below, where the operator
       // sees which list it was and why.
-      const freshness = checkTrustListFreshness(xml, {
+      const freshness = checkTrustListFreshness(signed, {
         now,
         skip: config.insecureSkipFreshnessCheck ?? false,
         label: pointer.url,
       });
-      const parsed = parseTrustServices(xml, config.serviceTypes);
+      const parsed = parseTrustServices(signed, config.serviceTypes);
       services.push(...parsed);
       sources.push({
         territory: pointer.territory,
@@ -271,12 +274,39 @@ export async function fetchTrustAnchors(
   return { anchors: TrustAnchors.fromTrustServices(services), sources, failures, validUntil };
 }
 
-/** Verify a trust list's enveloped XML signature. */
+/**
+ * Verify a trust list's enveloped XML signature, and return the content that
+ * signature actually covered.
+ *
+ * The return value is the point. Verifying a document and then parsing *the
+ * document* are two different statements whenever a reference covers less than
+ * the whole of it, and the gap between them is XML Signature Wrapping: the
+ * attacker keeps a genuinely signed subtree intact, so the signature verifies,
+ * and adds their own `TSPService` outside it, where every `//tsl:TSPService`
+ * search below this line would have found it. A service certificate nobody
+ * signed becomes a trust anchor. That is not hypothetical here — a national
+ * list may be fetched over plain http (see `NATIONAL_LIST_PROTOCOLS`), so an
+ * on-path attacker can rewrite the envelope around a signature they cannot
+ * forge.
+ *
+ * `checkSignature` does not close this: it proves the references are intact and
+ * that SignedInfo is signed, never which element they cover. What closes it is
+ * reading the octets xml-crypto digested — `getSignedReferences()` — instead of
+ * the string we fetched. Everything downstream parses that, so what was
+ * verified is what is read, and content outside the signature is not merely
+ * distrusted but absent.
+ *
+ * Callers of `parsePointers`, `parseTrustServices` and `parseServiceCertificates`
+ * must pass this return value rather than the fetched XML for the same reason.
+ */
 export function verifyTrustList(
   xml: string,
   options: { expectedCerts?: X509Certificate[]; skip?: boolean; label: string },
-): void {
-  if (options.skip) return;
+): string {
+  // The escape hatch skips the signature, so there is no signed content to
+  // return and the caller gets what it passed in. Never enable outside
+  // development: it disables the wrapping defence with it.
+  if (options.skip) return xml;
 
   const doc = new DOMParser().parseFromString(xml, 'text/xml');
   const signatureNode = (select('//ds:Signature', doc as unknown as Node) as Node[])[0];
@@ -306,6 +336,39 @@ export function verifyTrustList(
       throw new Error(`${options.label}: signed by an unexpected certificate (${actual.subject})`);
     }
   }
+
+  return signedTrustList(signedXml, options.label);
+}
+
+/**
+ * The trust list among the octets the signature covered.
+ *
+ * `getSignedReferences()` is populated only on the success path — xml-crypto
+ * clears it if any reference fails to validate or if SignedInfo's own signature
+ * does not verify — so every string here is content this signature digested.
+ * One of them has to *be* a trust list: a signature covering only, say, a
+ * `SchemeInformation` subtree authenticates that subtree and says nothing about
+ * the services, and taking the list from the surrounding document anyway is the
+ * exact move this function exists to prevent.
+ */
+function signedTrustList(signedXml: SignedXml, label: string): string {
+  const signed = signedXml.getSignedReferences();
+  for (const content of signed) {
+    let root: { namespaceURI: string | null; localName: string | null } | null = null;
+    try {
+      root = new DOMParser().parseFromString(content, 'text/xml').documentElement;
+    } catch {
+      // A reference may cover something that is not a document on its own.
+      // That is not this one; keep looking.
+    }
+    if (root && root.namespaceURI === TSL_NS && root.localName === 'TrustServiceStatusList') {
+      return content;
+    }
+  }
+  throw new Error(
+    `${label}: the signature is valid but covers no TrustServiceStatusList ` +
+      `(${signed.length} signed reference(s)), so the list itself is unsigned`,
+  );
 }
 
 /**
@@ -386,6 +449,13 @@ export function checkTrustListFreshness(
   return { issued, nextUpdate };
 }
 
+/**
+ * The national list pointers, from content `verifyTrustList` returned.
+ *
+ * Pass the fetched document instead and a pointer may be one nobody signed —
+ * and a pointer names both where a list lives and which certificates
+ * authenticate it. See `verifyTrustList`.
+ */
 export function parsePointers(xml: string): Pointer[] {
   const doc = new DOMParser().parseFromString(xml, 'text/xml');
   const nodes = select('//tsl:OtherTSLPointer', doc as unknown as Node) as Node[];
@@ -400,7 +470,9 @@ export function parsePointers(xml: string): Pointer[] {
 }
 
 /**
- * Every service certificate, with the periods it was granted for.
+ * Every service certificate, with the periods it was granted for, from content
+ * `verifyTrustList` returned — never from the fetched document, or a service
+ * added outside the signature is read as though it had been signed.
  *
  * A `TSPService` carries its current status in `ServiceInformation` and, for
  * two thirds of the services actually published, the statuses that preceded it
@@ -511,7 +583,8 @@ function readEntry(node: Node | undefined): ParsedEntry | undefined {
  * Certificates of every service granted *now*.
  *
  * The historical view is `parseTrustServices`; this is the answer to the
- * narrower question, kept because it is the one most callers have.
+ * narrower question, kept because it is the one most callers have. Same input:
+ * what `verifyTrustList` returned.
  */
 export function parseServiceCertificates(xml: string, serviceTypes: string[]): X509Certificate[] {
   const now = new Date();

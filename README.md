@@ -332,6 +332,9 @@ anchors, that its `sub` is the URI the credential named, and that it has not
 expired; SD-JWT digests and
 disclosures (RFC 9901); trust list freshness, in that a list past its own
 `NextUpdate` — or declaring none — is refused rather than replayed (see below);
+trust list signature *coverage*, so that the services parsed are the ones the
+signature protected rather than whatever the fetched document contained (see
+below);
 SD-JWT VC media types
 `dc+sd-jwt` and transitional `vc+sd-jwt` (draft-18); OID4VP 1.0 request and
 response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
@@ -651,6 +654,34 @@ Two details the real lists forced:
   `StatusStartingTime`; ordering the two by time gives the live entry a
   zero-length interval and drops the service. That cost 14 real anchors before
   it was pinned by a test.
+
+### What the trust list signature covers
+
+An XML signature covers a *reference*, not a file, and every parser here reads
+the list by XPath from the root. Those are two different documents whenever a
+reference covers less than the whole, and the gap between them is **XML
+Signature Wrapping**: leave a genuinely signed subtree untouched so the
+signature still verifies, nest it inside a new root, and add a `TSPService` of
+your own outside it. `//tsl:TSPService` finds both. The attacker's service
+certificate becomes a trust anchor without anyone signing it.
+
+`xml-crypto`'s `checkSignature` does not close this, and does not claim to: it
+proves the references are intact and that `SignedInfo` is signed, never which
+element they covered. Nor is the attack remote here — a national list may be
+fetched over plain http (see below), so rewriting the envelope around a
+signature that cannot be forged is precisely the move an on-path attacker has.
+
+So `verifyTrustList` **returns the octets the signature covered** — xml-crypto's
+`getSignedReferences()`, populated only on the success path — and everything
+downstream parses that rather than what was fetched. Freshness, pointers and
+services are all read from the signed content, so material outside the signature
+is not merely distrusted, it is absent. A signature that covers no
+`TrustServiceStatusList` at all — over the header alone, say — is refused rather
+than treated as covering the list it sits in.
+
+Callers using `parsePointers`, `parseTrustServices` or `parseServiceCertificates`
+directly must pass that return value for the same reason; `fetchTrustAnchors`
+already does.
 
 ### Trust list freshness
 

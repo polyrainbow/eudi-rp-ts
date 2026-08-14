@@ -14,6 +14,7 @@ import {
   parseTrustServices,
   verifyTrustList,
 } from '../src/trust/lotl.ts';
+import { trustListSigner } from './signed-trust-list.ts';
 
 /** Network tests are opt-in: RUN_NETWORK_TESTS=1 npm test */
 const online = process.env['RUN_NETWORK_TESTS'] === '1';
@@ -143,6 +144,143 @@ describe('trust list parsing', () => {
   it('honours the skip flag only when explicitly set', () => {
     // Guards the insecure escape hatch: it must do nothing unless asked.
     verifyTrustList(`<TrustServiceStatusList xmlns="${TSL}"/>`, { label: 'sample', skip: true });
+  });
+});
+
+/**
+ * Verifying a document and parsing a document are two different statements.
+ *
+ * An XML signature covers a reference, not a file, and every parser here reads
+ * the list by XPath from the root. Where those two disagree is XML Signature
+ * Wrapping: the attacker leaves a genuinely signed subtree untouched, so the
+ * signature verifies, and puts a `TSPService` of their own outside it, where
+ * `//tsl:TSPService` finds it and nothing checked it. A national list may be
+ * fetched over plain http, so rewriting the envelope around a signature that
+ * cannot be forged is exactly the move available to an on-path attacker.
+ *
+ * `verifyTrustList` therefore returns the octets the signature covered, and
+ * `fetchTrustAnchors` parses those rather than what it fetched.
+ */
+const signer = await trustListSigner();
+/** A certificate on no list, standing in for whatever the attacker controls. */
+const rogue = await trustListSigner('CN=Not On Any List');
+
+describe('XML signature coverage', () => {
+  const schemeXml = `<SchemeInformation>
+      <ListIssueDateTime>2026-06-15T00:00:00Z</ListIssueDateTime>
+      <NextUpdate><dateTime>2026-12-15T00:00:00Z</dateTime></NextUpdate>
+    </SchemeInformation>`;
+
+  const listWith = (...services: string[]) =>
+    `<TrustServiceStatusList xmlns="${TSL}">${schemeXml}<TrustServiceProviderList><TrustServiceProvider><TSPServices>
+      ${services.join('')}
+    </TSPServices></TrustServiceProvider></TrustServiceProviderList></TrustServiceStatusList>`;
+
+  /** Nest a signed list inside a new root and add a service outside it. */
+  const wrap = (signed: string, ...outside: string[]) =>
+    `<TrustServiceStatusList xmlns="${TSL}">${schemeXml}<TrustServiceProviderList><TrustServiceProvider><TSPServices>
+      ${outside.join('')}
+    </TSPServices></TrustServiceProvider></TrustServiceProviderList>${signed.replace(/^<\?xml[^?]*\?>/, '')}</TrustServiceStatusList>`;
+
+  it('returns the content the signature covered', () => {
+    const signed = signer.sign(listWith(serviceXml(GRANTED, CA_QC, ANCHOR_B64)));
+
+    const content = verifyTrustList(signed, {
+      expectedCerts: [new X509Certificate(signer.certificatePem)],
+      label: 'signed',
+    });
+
+    // The positive control the wrapping tests need: without it they would pass
+    // just as well against a function that returns nothing readable at all.
+    const certificates = parseServiceCertificates(content, []);
+    assert.equal(certificates.length, 1);
+    assert.equal(certificates[0]!.fingerprint256, ANCHOR.fingerprint256);
+  });
+
+  it('does not carry a service that was added outside the signature', () => {
+    const signed = signer.sign(listWith(serviceXml(GRANTED, CA_QC, ANCHOR_B64)));
+    const attacked = wrap(signed, serviceXml(GRANTED, CA_QC, rogue.certificateBase64));
+
+    // The attack is real, not hypothetical: parsing the fetched document finds
+    // both services, and the signature over it still verifies.
+    assert.equal(parseServiceCertificates(attacked, []).length, 2);
+
+    const content = verifyTrustList(attacked, {
+      expectedCerts: [new X509Certificate(signer.certificatePem)],
+      label: 'wrapped',
+    });
+
+    const certificates = parseServiceCertificates(content, []);
+    assert.equal(certificates.length, 1);
+    assert.equal(certificates[0]!.fingerprint256, ANCHOR.fingerprint256);
+  });
+
+  it('refuses a signature that covers no trust list at all', () => {
+    // A signature over the header authenticates the header. Reading the
+    // services out of the surrounding document anyway is the whole mistake.
+    const signed = signer.sign(listWith(serviceXml(GRANTED, CA_QC, ANCHOR_B64)), {
+      xpath: `//*[local-name(.)='SchemeInformation']`,
+    });
+
+    assert.throws(
+      () =>
+        verifyTrustList(signed, {
+          expectedCerts: [new X509Certificate(signer.certificatePem)],
+          label: 'partial',
+        }),
+      /covers no TrustServiceStatusList/,
+    );
+  });
+
+  it('keeps the wrapped service out of the anchor set, end to end', async () => {
+    const LOTL_URL = 'https://lotl.test/eu-lotl.xml';
+    const NATIONAL_URL = 'https://lists.test/xa.xml';
+
+    const lotl = signer.sign(
+      `<TrustServiceStatusList xmlns="${TSL}" xmlns:add="${ADD}"><SchemeInformation>
+        <ListIssueDateTime>2026-06-15T00:00:00Z</ListIssueDateTime>
+        <NextUpdate><dateTime>2026-12-15T00:00:00Z</dateTime></NextUpdate>
+        <PointersToOtherTSL><OtherTSLPointer>
+          <ServiceDigitalIdentities><ServiceDigitalIdentity><DigitalId>
+            <X509Certificate>${signer.certificateBase64}</X509Certificate>
+          </DigitalId></ServiceDigitalIdentity></ServiceDigitalIdentities>
+          <TSLLocation>${NATIONAL_URL}</TSLLocation>
+          <AdditionalInformation>
+            <OtherInformation><TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType></OtherInformation>
+            <OtherInformation><SchemeTerritory>XA</SchemeTerritory></OtherInformation>
+            <OtherInformation><add:MimeType>application/vnd.etsi.tsl+xml</add:MimeType></OtherInformation>
+          </AdditionalInformation>
+        </OtherTSLPointer></PointersToOtherTSL>
+      </SchemeInformation></TrustServiceStatusList>`,
+    );
+    const national = wrap(
+      signer.sign(listWith(serviceXml(GRANTED, CA_QC, ANCHOR_B64))),
+      serviceXml(GRANTED, CA_QC, rogue.certificateBase64),
+    );
+
+    const documents: Record<string, string> = { [LOTL_URL]: lotl, [NATIONAL_URL]: national };
+    const fetchImpl: typeof fetch = async (input) => {
+      const body = documents[String(input)];
+      if (!body) throw new Error(`unexpected fetch: ${String(input)}`);
+      return new Response(body, { headers: { 'content-type': 'application/vnd.etsi.tsl+xml' } });
+    };
+
+    const result = await fetchTrustAnchors(
+      {
+        lotlUrl: LOTL_URL,
+        serviceTypes: [],
+        lotlSigningAnchorsPem: signer.certificatePem,
+        insecureSkipSignatureCheck: false,
+      },
+      { fetchImpl, now: new Date('2026-08-12T00:00:00Z') },
+    );
+
+    // The list loads — the signature is valid and the freshness is current, so
+    // nothing here fails closed. The rogue service is simply not in what was
+    // signed, and an anchor set that contained it would be the bug.
+    assert.equal(result.failures.length, 0);
+    assert.equal(result.anchors.certificates.length, 1);
+    assert.equal(result.anchors.certificates[0]!.fingerprint256, ANCHOR.fingerprint256);
   });
 });
 
@@ -614,9 +752,12 @@ describe('trust list signatures (network)', { skip: online ? false : 'set RUN_NE
     const response = await fetch('https://ec.europa.eu/tools/lotl/eu-lotl.xml');
     const xml = await response.text();
 
-    verifyTrustList(xml, { label: 'EU LOTL' });
+    // The live list is where the coverage check meets a signature nobody here
+    // constructed: if the Commission's reference did not cover the whole list,
+    // this would throw rather than quietly parse the document instead.
+    const content = verifyTrustList(xml, { label: 'EU LOTL' });
 
-    const pointers = parsePointers(xml).filter((p) => p.territory !== 'EU');
+    const pointers = parsePointers(content).filter((p) => p.territory !== 'EU');
     assert.ok(pointers.length > 20, `expected many national lists, got ${pointers.length}`);
   });
 
@@ -631,11 +772,11 @@ describe('trust list signatures (network)', { skip: online ? false : 'set RUN_NE
     const xml = await (await fetch(pointer.url)).text();
     const { X509Certificate } = await import('node:crypto');
 
-    verifyTrustList(xml, {
+    const content = verifyTrustList(xml, {
       expectedCerts: pointer.signingCerts.map((pem) => new X509Certificate(pem)),
       label: pointer.url,
     });
 
-    assert.ok(parseServiceCertificates(xml, [CA_QC]).length > 0);
+    assert.ok(parseServiceCertificates(content, [CA_QC]).length > 0);
   });
 });

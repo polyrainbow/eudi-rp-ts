@@ -118,7 +118,15 @@ failure mode means adding or reusing a code, not a new error string.
   Key binding is verified only when a nonce is supplied, which is why `verifySdJwtVc` throws
   rather than defaulting `requireKeyBinding`.
 - `xml-crypto` ships no RSASSA-PSS, which several member states' trust lists use.
-  `src/trust/lotl.ts` implements it.
+  `src/trust/lotl.ts` implements it. Its `checkSignature` also never says *which*
+  element the signature covered — only that the references are intact — so
+  verifying a document and then parsing that document are two different
+  statements, and the gap between them is XML Signature Wrapping.
+  `verifyTrustList` therefore returns the octets the signature covered
+  (`getSignedReferences()`), and `fetchTrustAnchors` parses that rather than what
+  it fetched. Anything reading a trust list must read the returned content: a
+  new parse of the fetched XML reopens the hole silently, because the wrapped
+  document verifies.
 - Status list fetching *and* verifying the list's own signature are the relying party's job.
   `src/trust/status.ts` chains it to the same anchors and **fails closed**.
 - Nothing in the tree does CRL or OCSP. `src/trust/revocation.ts` implements both on

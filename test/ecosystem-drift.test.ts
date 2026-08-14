@@ -197,12 +197,15 @@ describe('the reference issuer', { skip }, () => {
 describe('the live trusted lists', { skip }, () => {
   it('still support every assumption the trust code makes', async (t) => {
     const lotlXml = await (await fetch(EU_LOTL)).text();
-    verifyTrustList(lotlXml, { label: 'EU LOTL' });
+    // The signed content, not the document: whether the live LOTL's signature
+    // still covers a whole `TrustServiceStatusList` is itself drift, and it is
+    // what everything below is entitled to read.
+    const signedLotl = verifyTrustList(lotlXml, { label: 'EU LOTL' });
     // The root's own freshness. If this throws, every deployment following the
     // LOTL has already lost every anchor, so it is the first thing to know.
-    checkTrustListFreshness(lotlXml, { label: 'EU LOTL' });
+    checkTrustListFreshness(signedLotl, { label: 'EU LOTL' });
 
-    const pointers = parsePointers(lotlXml).filter(
+    const pointers = parsePointers(signedLotl).filter(
       (pointer) =>
         pointer.mimeType === 'application/vnd.etsi.tsl+xml' &&
         !pointer.type.endsWith('EUlistofthelists'),

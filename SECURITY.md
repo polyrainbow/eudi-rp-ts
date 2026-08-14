@@ -22,7 +22,11 @@ about where it stops. Before relying on it for anything real, read
 - **Trust list processing is not full ETSI TS 119 615.** Service status history,
   validity-time evaluation and the list's own issue date and next-update are
   implemented — a list past its `NextUpdate`, or declaring none, is refused
-  rather than replayed. Qualifier processing and `Sie` extensions are not.
+  rather than replayed. So is signature *coverage*: `verifyTrustList` returns
+  the octets the signature covered and everything downstream parses those, so a
+  service added outside the signed reference is absent rather than trusted (XML
+  Signature Wrapping). Qualifier processing and `Sie` extensions are not
+  implemented.
 - **Sessions are in memory**, so a restart drops them and more than one
   instance breaks them.
 - **The algorithm policy defaults to ES256**, which is what the EUDI reference
