@@ -33,7 +33,27 @@ export type { AgeEvidence } from './predicate/age.ts';
 
 // Trust anchors: pinned, or from an ETSI TS 119 612 trust list.
 export { TrustAnchors } from './trust/anchors.ts';
-export type { GrantedInterval, TrustServiceEntry } from './trust/anchors.ts';
+export type { GrantedInterval, ServiceQualification, TrustServiceEntry } from './trust/anchors.ts';
+// ETSI TS 119 612 §5.5.9 service information extensions, and the qualifiers
+// TS 119 615 §4.4 derives from them. Exported to be *read*: the library derives
+// what the lists say about an issuer's certificate and never decides what it
+// obliges, so the caller needs both the answer and the vocabulary.
+// `RECOGNISED_SERVICE_EXTENSIONS` is the security-relevant part, on the same
+// terms as `RECOGNISED_CRITICAL_EXTENSIONS` — a critical extension outside it
+// costs the service its place as an anchor.
+export {
+  RECOGNISED_SERVICE_EXTENSIONS,
+  qualifiersFor,
+  readServiceExtensions,
+  satisfiesCriteria,
+} from './trust/service-extensions.ts';
+export type {
+  Criteria,
+  CriteriaAssert,
+  KeyUsageCriterion,
+  QualificationElement,
+  ServiceExtensions,
+} from './trust/service-extensions.ts';
 export {
   checkTrustListFreshness,
   fetchTrustAnchors,

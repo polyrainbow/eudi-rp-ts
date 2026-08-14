@@ -401,8 +401,25 @@ as the **LOTL**, despite the near-identical name.
 
 **ETSI TS 119 615** — the procedures for *interpreting* a trusted list: service
 status history, qualifiers, validity at a point in time. This project implements
-service status history and validity-time evaluation; qualifiers and `Sie`
-extensions it does not. **(partly used here)**
+service status history, validity-time evaluation and the qualifier derivation of
+§4.4. What it does not implement is the step after: turning a qualifier into a
+verdict, which it leaves to the caller. **(partly used here)**
+
+**Sie** — a Service Information Extension, ETSI TS 119 612 §5.5.9, after the
+`SvcInfoExt` namespace. Usually means `Qualifications` specifically: a rule set a
+service publishes over the certificates *it issues*, matching on policy OIDs,
+KeyUsage bits, Extended Key Usage or subject DN attributes, and awarding
+qualifiers to those that match. Marked critical by half the live lists, which
+means an entry carrying one a verifier cannot process may not be used at all.
+**(used here)**
+
+**Qualifier** — a URI a `Qualifications` rule awards to a matching certificate:
+`QCStatement`, `QCForESig`, `QCForESeal`, `QCForWSA`, `QCWithQSCD`, `NotQualified`
+and the rest of TS 119 612 Annex D. It describes a *certificate*, not a service —
+two certificates from one CA can qualify differently. This project derives them
+and reports them; whether one is required is the relying party's policy, and
+`NotQualified` is not a rejection here, since a PID Provider need not be a QTSP.
+**(used here)**
 
 **QTSP / TSP** — (Qualified) Trust Service Provider. The entities a trusted list
 lists. Note the eIDAS trusted lists cover qualified trust services, **not** EUDI

@@ -505,6 +505,7 @@ async function verifyMdocPresentation(
     claims: result.value.claims,
     credentialType: result.value.docType,
     issuerCertificateSubject: result.value.issuerCertificateSubject,
+    issuerQualification: result.value.issuerQualification,
     // mdoc binds the holder through the device signature over the session
     // transcript rather than a Key Binding JWT; verifyDeviceResponse has
     // already established the equivalent guarantee.

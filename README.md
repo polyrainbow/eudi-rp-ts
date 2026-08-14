@@ -358,9 +358,11 @@ policy qualifiers are read but not acted on — which §6.1.5 (f) leaves local.
 **Simplified, deliberately.**
 
 - **Trust lists are not fully TS 119 615.** Service status history,
-  validity-time evaluation and the list's own issue date and next-update *are*
-  implemented (see below). Not implemented: no qualifier processing and no `Sie`
-  extensions.
+  validity-time evaluation, the list's own issue date and next-update, and
+  §5.5.9 service information extensions including `Qualifications` *are*
+  implemented (see below). Not implemented: the parts of TS 119 615 that turn a
+  qualifier into a verdict — this project derives the qualifiers and reports
+  them, and leaves what they oblige to the caller.
 - **Sessions are in memory** in the demo app. Restarting drops them, and more
   than one instance breaks them. The library holds no state.
 - **ES256 by default** — the whole of the EUDI reference deployment. ECDSA on
@@ -654,6 +656,64 @@ Two details the real lists forced:
   `StatusStartingTime`; ordering the two by time gives the live entry a
   zero-length interval and drops the service. That cost 14 real anchors before
   it was pinned by a test.
+
+### Qualifiers and service extensions
+
+A trusted list says more about a service than *granted*. ETSI TS 119 612 §5.5.9
+gives each entry a set of extensions, and two of them carry statements a
+verifier can act on: `AdditionalServiceInformation`, which says what the service
+is provided *for* — `ForeSignatures`, `ForeSeals`, `ForWebSiteAuthentication`,
+`RootCA-QC` — and `Qualifications`, usually called *the Sie* after the namespace
+it lives in, which is a **rule set over the certificates the service issues**.
+Not a property of the CA: a rule matches on policy OIDs, KeyUsage bits, Extended
+Key Usage or subject DN attributes, and awards qualifiers such as `QCStatement`,
+`QCForESig`, `QCWithQSCD` or `NotQualified` to the certificates that match. Two
+leaves under one CA can qualify differently, which is why nothing here can be
+reduced to a flag on the anchor.
+
+`verifyTrustList` reads all of it; `TrustAnchors.qualify` evaluates the rules
+against a certificate; and the answer reaches the caller as `issuerQualification`
+on `VerifiedCredential` and `VerifiedMdoc`, and as `qualification` on
+`ResolvedIssuer`:
+
+```ts
+const result = await verifySdJwtVc({ credential, anchors, keyBinding });
+if (result.verified) {
+  result.issuerQualification?.qualifiers; // ['…/QCForESeal', '…/QCWithQSCD']
+  result.issuerQualification?.serviceInformation; // ['…/ForeSeals']
+}
+```
+
+**Derived, never enforced.** Whether an issuer must hold a qualified certificate
+for electronic seals is a policy, and policies belong to the caller — the same
+relation `requiredExtendedKeyUsage` has to Extended Key Usage. `NotQualified` in
+particular is *not* a rejection here: an EUDI PID Provider need not be a QTSP and
+most are not, so reading eIDAS qualification as a precondition for issuing a PID
+would refuse most of the ecosystem this library exists to verify. Note the two
+kinds of silence, which a caller must keep apart: `undefined` means no list was
+consulted — a pinned anchor, or a service publishing no extensions — while an
+empty `qualifiers` array means the rules were evaluated and none matched.
+
+**A critical extension this project cannot process costs the service its place
+as an anchor.** §5.5.9 makes `Critical="true"` the member state saying the entry
+may not be used without understanding the extension, which is the same statement
+RFC 5280 §6.1.4 (o) makes about a certificate, so it gets the same answer:
+`RECOGNISED_SERVICE_EXTENSIONS` is the set this project claims to read, and a
+critical extension outside it drops the entry. So does an extension inside it
+that cannot be read, and so does a `CriteriaList` carrying no criteria — vacuous
+truth is the trap there, since `assert="all"` over nothing is satisfied by every
+certificate in existence, and there is no safe direction to guess in when
+qualifiers both grant and take away.
+
+Measured on 2026-08-14 across all 30 reachable lists and 10010 service entries:
+**half of everything published is critical** — 3810 `AdditionalServiceInformation`
+and 1195 `Qualifications` — and turning the rule on **costs no anchors at all**,
+because every critical extension published is one of the four now processed. The
+one unrecognised extension on any list, Slovakia's own, is published
+non-critical, which is its author saying it may be ignored. All three `assert`
+values, nested criteria lists, and all four criterion kinds occur in live rules;
+see REPRODUCE.md, and `ecosystem-drift.test.ts` re-measures both numbers against
+the library's own set each run.
 
 ### What the trust list signature covers
 

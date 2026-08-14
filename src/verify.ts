@@ -15,7 +15,7 @@ import { type Outcome, accept, reject } from './result.ts';
 import { type AgeResult, evaluateAgeOver18SdJwt } from './predicate/age.ts';
 
 export type { AgeResult };
-import type { TrustAnchors } from './trust/anchors.ts';
+import type { ServiceQualification, TrustAnchors } from './trust/anchors.ts';
 import { type PathValidationOptions, resolveIssuerKeyFromX5c } from './trust/issuer-key.ts';
 import { createStatusChecker } from './trust/status.ts';
 import { checkChainRevocation, revocationRejection, revocationVia } from './trust/revocation.ts';
@@ -131,6 +131,16 @@ export type VerifiedCredential = {
    */
   credentialType: string;
   issuerCertificateSubject: string;
+  /**
+   * What the trusted lists say about the issuer's certificate — the
+   * `AdditionalServiceInformation` its service publishes and the qualifiers
+   * TS 119 615 §4.4 derives for the leaf. Undefined when nothing said anything:
+   * a pinned anchor, or a service publishing no extensions.
+   *
+   * Reported for the caller's policy to use, exactly as it reaches
+   * `ResolvedIssuer`. Nothing in this library rejects on it.
+   */
+  issuerQualification: ServiceQualification | undefined;
   keyBinding: { audience: string; nonce: string } | undefined;
 };
 
@@ -412,6 +422,7 @@ export async function verifySdJwtVc(
     claims,
     credentialType: vct,
     issuerCertificateSubject: issuer.value.leaf.subject,
+    issuerQualification: issuer.value.qualification,
     keyBinding,
   });
 }

@@ -2,7 +2,7 @@ import { X509Certificate, createHash } from 'node:crypto';
 import { DEFAULT_ALLOWED_ALGS, type JwsAlg, keyUnusableFor } from '../crypto.ts';
 import type { TtlCache } from '../fetching.ts';
 import { type Outcome, accept, reject } from '../result.ts';
-import type { TrustAnchors } from '../trust/anchors.ts';
+import type { ServiceQualification, TrustAnchors } from '../trust/anchors.ts';
 import { type PathValidationOptions, resolveIssuerCertificateChain } from '../trust/issuer-key.ts';
 import { checkChainRevocation, revocationRejection, revocationVia } from '../trust/revocation.ts';
 import { type EventSink, noopSink } from '../events.ts';
@@ -96,6 +96,13 @@ export type VerifiedMdoc = {
   /** Disclosed elements, by namespace then element identifier. */
   claims: Record<string, Record<string, unknown>>;
   issuerCertificateSubject: string;
+  /**
+   * What the trusted lists say about the issuer's certificate, or undefined
+   * when nothing said anything. Same field, same meaning and same
+   * non-enforcement as on `VerifiedCredential` — a wallet's choice of format
+   * must not decide what the verifier can read about the issuer.
+   */
+  issuerQualification: ServiceQualification | undefined;
   /** The holder's device key, for device authentication. */
   deviceKey: unknown;
   validity: { signed: Date; validFrom: Date; validUntil: Date | undefined };
@@ -308,6 +315,7 @@ export async function verifyMdoc(options: MdocVerifyOptions): Promise<Outcome<Ve
     docType,
     claims: claims.value,
     issuerCertificateSubject: trusted.value.leaf.subject,
+    issuerQualification: trusted.value.qualification,
     deviceKey: get(get(mso, 'deviceKeyInfo'), 'deviceKey'),
     validity: {
       signed: validity.signed ?? new Date(0),

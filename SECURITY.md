@@ -25,8 +25,13 @@ about where it stops. Before relying on it for anything real, read
   rather than replayed. So is signature *coverage*: `verifyTrustList` returns
   the octets the signature covered and everything downstream parses those, so a
   service added outside the signed reference is absent rather than trusted (XML
-  Signature Wrapping). Qualifier processing and `Sie` extensions are not
-  implemented.
+  Signature Wrapping). So are §5.5.9 service information extensions, including
+  `Qualifications` — a service publishing a critical extension this project
+  cannot process is dropped rather than trusted, and the qualifiers derived for
+  an issuer's certificate are **reported to the caller and never enforced**.
+  What is not implemented is the rest of TS 119 615: turning a qualifier into a
+  verdict is left to the caller's policy, deliberately, because an EUDI PID
+  Provider need not be a QTSP.
 - **Sessions are in memory**, so a restart drops them and more than one
   instance breaks them.
 - **The algorithm policy defaults to ES256**, which is what the EUDI reference

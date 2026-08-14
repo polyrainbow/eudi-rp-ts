@@ -242,6 +242,8 @@ export async function issue(
     subjectAltNames?: NameSpec[];
     serial?: string;
     keyUsage?: KeyUsageName[];
+    /** Extended Key Usage OIDs, which a TS 119 612 criterion can ask for. */
+    extendedKeyUsage?: string[];
     policies?: PolicySpec;
     /** Overrides the subject-derived issuer, for a self-issued certificate. */
     issuer?: string;
@@ -256,6 +258,9 @@ export async function issue(
     options.pathLength === undefined ? (isCa ? 2 : undefined) : (options.pathLength ?? undefined);
   const extensions: x509.Extension[] = [new x509.BasicConstraintsExtension(isCa, pathLength, true)];
   if (options.keyUsage) extensions.push(keyUsageExtension(options.keyUsage));
+  if (options.extendedKeyUsage) {
+    extensions.push(new x509.ExtendedKeyUsageExtension(options.extendedKeyUsage, false));
+  }
   if (options.policies) extensions.push(...policyExtensions(options.policies));
   if (options.constraints) {
     extensions.push(

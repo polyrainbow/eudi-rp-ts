@@ -5,6 +5,7 @@ import type { SignatureAlgorithm } from 'xml-crypto';
 import xpath from 'xpath';
 import { DEFAULT_TIMEOUT_MS, fetchText as fetchWithTimeout } from '../fetching.ts';
 import { TrustAnchors, type TrustServiceEntry } from './anchors.ts';
+import { type ServiceExtensions, readServiceExtensions } from './service-extensions.ts';
 
 /**
  * ETSI TS 119 612 trust list client.
@@ -531,8 +532,15 @@ export function parseTrustServices(xml: string, serviceTypes: string[]): TrustSe
       if (until !== undefined && until <= entry.startingTime) continue;
 
       const granted = [{ from: entry.startingTime, until }];
+      // Carried per entry, not per service: a status history instance has its
+      // own extensions, and the qualifications in effect are the ones published
+      // beside the status they qualify.
+      const qualification = {
+        serviceInformation: entry.extensions.additionalServiceInformation,
+        qualifications: entry.extensions.qualifications,
+      };
       for (const certificate of entry.certificates) {
-        entries.push({ certificate, granted });
+        entries.push({ certificate, granted, qualification });
       }
     }
   }
@@ -545,6 +553,7 @@ type ParsedEntry = {
   type: string;
   startingTime: Date;
   certificates: X509Certificate[];
+  extensions: ServiceExtensions;
 };
 
 /**
@@ -556,11 +565,25 @@ type ParsedEntry = {
  * requires the element, and across 2797 services on eight member states' lists —
  * plus 3330 history instances — every single one carries it, so nothing real is
  * lost by insisting. See REPRODUCE.md.
+ *
+ * An entry whose `ServiceInformationExtensions` cannot be read is dropped on the
+ * same terms, and TS 119 612 §5.5.9 is more explicit about it than ETSI is about
+ * the starting time: an extension marked critical is the member state saying the
+ * entry may not be used without understanding it. Reading 10010 entries across
+ * every live national list, none is dropped by this (REPRODUCE.md) — the only
+ * critical extensions published are the ones `service-extensions.ts` recognises.
  */
 function readEntry(node: Node | undefined): ParsedEntry | undefined {
   if (!node) return undefined;
   const startingTime = new Date(text(first(select('./tsl:StatusStartingTime', node))));
   if (Number.isNaN(startingTime.getTime())) return undefined;
+
+  let extensions: ServiceExtensions;
+  try {
+    extensions = readServiceExtensions(node);
+  } catch {
+    return undefined;
+  }
 
   const certificates: X509Certificate[] = [];
   for (const certificate of select('.//tsl:X509Certificate', node) as Node[]) {
@@ -576,6 +599,7 @@ function readEntry(node: Node | undefined): ParsedEntry | undefined {
     type: text(first(select('./tsl:ServiceTypeIdentifier', node))),
     startingTime,
     certificates,
+    extensions,
   };
 }
 

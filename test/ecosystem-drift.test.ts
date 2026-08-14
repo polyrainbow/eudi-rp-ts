@@ -22,6 +22,10 @@ import {
   readPolicyMappings,
 } from '../src/trust/policies.ts';
 import { checkChainRevocation, readOcspResponders } from '../src/trust/revocation.ts';
+import {
+  RECOGNISED_SERVICE_EXTENSIONS,
+  readServiceExtensions,
+} from '../src/trust/service-extensions.ts';
 
 /**
  * Has the world changed?
@@ -238,6 +242,11 @@ describe('the live trusted lists', { skip }, () => {
     const criticalAndRejected = new Set<string>();
     const anchors: X509Certificate[] = [];
     const unreachable: string[] = [];
+    const criticalServiceExtensions = new Set<string>();
+    const serviceExtensionsRefused: string[] = [];
+    const publishedQualifiers = new Set<string>();
+    const serviceInformationUris = new Set<string>();
+    let servicesWithQualifications = 0;
 
     for (const pointer of pointers) {
       let xml: string;
@@ -271,6 +280,30 @@ describe('the live trusted lists', { skip }, () => {
         // instead of by certificate, which leaves nothing to anchor a chain at.
         if ((select('.//tsl:X509Certificate', info) as Node[]).length === 0) {
           identifiedWithoutCertificate += 1;
+        }
+
+        // TS 119 612 §5.5.9. Two measurements, and the second is the one the
+        // fail-closed rule rests on: which extensions are published *critical*,
+        // read against the library's own recognised set rather than a copy of
+        // it, so this cannot drift into agreeing with itself.
+        for (const extension of select('./tsl:ServiceInformationExtensions/tsl:Extension', info) as Node[]) {
+          if ((extension as unknown as Element).getAttribute('Critical') !== 'true') continue;
+          for (const child of Array.from((extension as unknown as Element).childNodes ?? [])) {
+            if ((child as unknown as Node).nodeType !== 1) continue;
+            const element = child as unknown as Element;
+            const name = `{${element.namespaceURI ?? ''}}${element.localName ?? ''}`;
+            if (!RECOGNISED_SERVICE_EXTENSIONS.has(name)) criticalServiceExtensions.add(name);
+          }
+        }
+        try {
+          const extensions = readServiceExtensions(info);
+          if (extensions.qualifications.length) servicesWithQualifications += 1;
+          for (const element of extensions.qualifications) {
+            for (const qualifier of element.qualifiers) publishedQualifiers.add(qualifier);
+          }
+          for (const uri of extensions.additionalServiceInformation) serviceInformationUris.add(uri);
+        } catch (error) {
+          serviceExtensionsRefused.push(`${pointer.territory}: ${(error as Error).message}`);
         }
       }
 
@@ -354,6 +387,12 @@ describe('the live trusted lists', { skip }, () => {
         `${policyMappers.length} map policies; ${inhibitors.length} inhibit mapping or anyPolicy`,
     );
 
+    t.diagnostic(
+      `${servicesWithQualifications} granted services publish Qualifications, using ` +
+        `${publishedQualifiers.size} distinct qualifier URIs; ` +
+        `${serviceInformationUris.size} distinct AdditionalServiceInformation URIs`,
+    );
+
     // Bounds, not exact counts: these lists change continuously and an exact
     // figure would fail every week for no reason.
     assert.ok(
@@ -388,6 +427,24 @@ describe('the live trusted lists', { skip }, () => {
       news(
         `${unreadablePolicies.length} certificate(s) carry a policy extension this project cannot read: ${unreadablePolicies.slice(0, 3).join('; ')}`,
         'every chain under them now fails closed with ISSUER_POLICY_NOT_PERMITTED, because an unreadable policy statement is not an absent one. Fix the reader in src/trust/policies.ts — the "nothing on the lists is unreadable" argument in REPRODUCE.md no longer holds.',
+      ),
+    );
+
+    assert.deepEqual(
+      [...criticalServiceExtensions],
+      [],
+      news(
+        `A granted service now publishes a critical ServiceInformationExtension this project does not process: ${[...criticalServiceExtensions].join(', ')}`,
+        'TS 119 612 §5.5.9 makes that entry unusable, so those services have just dropped out of the anchor set. Either process the extension in src/trust/service-extensions.ts and add it to RECOGNISED_SERVICE_EXTENSIONS, or accept the loss — but the "costs nothing today" argument in README "Qualifiers and service extensions" no longer holds.',
+      ),
+    );
+
+    assert.deepEqual(
+      serviceExtensionsRefused,
+      [],
+      news(
+        `${serviceExtensionsRefused.length} granted service(s) publish extensions this project cannot read: ${serviceExtensionsRefused.slice(0, 3).join('; ')}`,
+        'each of those services is now absent from the anchor set, because a rule that cannot be read cannot be applied and there is no safe direction to guess in — qualifiers grant and take away. Fix the reader in src/trust/service-extensions.ts.',
       ),
     );
 

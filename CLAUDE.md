@@ -112,7 +112,18 @@ failure mode means adding or reusing a code, not a new error string.
   but "was anything on it left unread" (§6.1.4 (o)). Its `RECOGNISED_CRITICAL_EXTENSIONS` set is
   the security-relevant part — every OID on it asserts that code elsewhere acts on that extension,
   so adding one without the processing silently reopens the hole. A test pins the set for exactly
-  that reason.
+  that reason. `service-extensions.ts` is the same inversion one level up, over a trust list's
+  own §5.5.9 extensions rather than a certificate's: `RECOGNISED_SERVICE_EXTENSIONS` carries the
+  identical promise, and a service publishing a critical extension outside it is dropped rather
+  than loaded as an anchor.
+- A trusted list's `Qualifications` (the "Sie") is a **rule set over the certificates a service
+  issues**, not a property of the service — so it is evaluated per end-entity certificate and
+  cannot be reduced to a flag on the anchor. `TrustAnchors.qualify` derives it; the answer reaches
+  the caller as `issuerQualification` on both formats' results and `qualification` on
+  `ResolvedIssuer`. **Derived, never enforced**: `NotQualified` is not a rejection, because an
+  EUDI PID Provider need not be a QTSP. Two kinds of silence, and they must stay apart —
+  `undefined` is "no list was consulted", an empty `qualifiers` array is "the rules were evaluated
+  and none matched".
 - `@sd-jwt/*` requires the KB-JWT `aud` to exist but never compares it to the verifier's own
   identifier. `src/verify.ts` checks it explicitly, twice (before and after library verification).
   Key binding is verified only when a nonce is supplied, which is why `verifySdJwtVc` throws
@@ -137,9 +148,10 @@ failure mode means adding or reusing a code, not a new error string.
 ### Deliberate simplifications
 
 The gaps listed under "Spec-compliant vs simplified" in the README and in `SECURITY.md` are
-decisions, not oversights: trust lists not fully TS 119 615 (service status history and
-validity-time evaluation *are* implemented; qualifiers and `Sie` extensions are not), in-memory
-sessions in the demo, ES256 only. Path validation is no longer among them — it implements RFC 5280
+decisions, not oversights: trust lists not fully TS 119 615 (service status history,
+validity-time evaluation and §5.5.9 extensions *are* implemented, qualifiers included; what is
+left to the caller is turning a qualifier into a verdict), in-memory sessions in the demo,
+ES256 only. Path validation is no longer among them — it implements RFC 5280
 §6.1 in full, Name Constraints, certificate policies, `pathLenConstraint` and §6.1.4 (o) included,
 via `@peculiar/asn1-x509` for the DER while crypto stays on `node:crypto`.
 

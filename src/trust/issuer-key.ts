@@ -1,7 +1,7 @@
 import { type KeyObject, X509Certificate } from 'node:crypto';
 import { decodeProtectedHeader, unsupportedKeyReason } from '../crypto.ts';
 import { type Outcome, accept, reject } from '../result.ts';
-import type { TrustAnchors } from './anchors.ts';
+import type { ServiceQualification, TrustAnchors } from './anchors.ts';
 import { isSelfIssued, readBasicConstraints } from './basic-constraints.ts';
 import { unrecognisedCriticalExtensions } from './critical-extensions.ts';
 import { readKeyUsage } from './key-usage.ts';
@@ -44,6 +44,20 @@ export type ResolvedIssuer = {
   leaf: X509Certificate;
   /** Leaf first, anchor last. */
   chain: X509Certificate[];
+  /**
+   * What the trusted lists say about the leaf (TS 119 612 §5.5.9,
+   * TS 119 615 §4.4), or undefined when no list said anything — a pinned
+   * anchor, or a service publishing no extensions.
+   *
+   * Reported, never enforced. Whether an issuer must hold a qualified
+   * certificate for electronic seals is the caller's policy and not a property
+   * of the chain, so this sits beside the validated chain in the same relation
+   * `requiredExtendedKeyUsage` has to Extended Key Usage. In particular
+   * `NotQualified` is not a rejection here: an EUDI PID Provider need not be a
+   * QTSP, and reading eIDAS qualification as a precondition for issuing a PID
+   * would refuse most of the ecosystem this library exists to verify.
+   */
+  qualification: ServiceQualification | undefined;
 };
 
 export type PathValidationOptions = {
@@ -258,7 +272,15 @@ export function resolveIssuerCertificateChain(
   const unusable = unsupportedKeyReason(leaf.publicKey);
   if (unusable) return reject('UNSUPPORTED_ALGORITHM', `Issuer key cannot be used: ${unusable}`);
 
-  return accept({ publicKey: leaf.publicKey, leaf, chain: fullChain });
+  // Derived against the leaf, which is the certificate `Qualifications` is
+  // written about — the rules say what the CA's *issued* certificates are, not
+  // what the CA is.
+  return accept({
+    publicKey: leaf.publicKey,
+    leaf,
+    chain: fullChain,
+    qualification: anchors.qualify(signingAnchor, leaf),
+  });
 }
 
 /**

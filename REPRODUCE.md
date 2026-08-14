@@ -593,6 +593,96 @@ PID DS - 002   2.5.29.19* 2.5.29.35 1.3.6.1.5.5.7.1.1 2.5.29.32 2.5.29.37
 `test/critical-extensions.test.ts` pins that against the committed fixtures, so
 it is checked offline on every run rather than only when the drift test does.
 
+### Qualifiers and service information extensions, 2026-08-14
+
+The whole of ETSI TS 119 612 §5.5.9, read off every service entry on every
+reachable national list — current entries and status history instances alike,
+because a history instance carries its own extensions and is what qualifies the
+status it sits beside.
+
+```
+$ node -e "…for each list, for each TSPService, read every ServiceInformation
+           and ServiceHistoryInstance through readServiceExtensions…"
+
+service entries read: 10010   (granted: 4618)   refused by this project: 0
+granted services publishing Qualifications: 1047   QualificationElements: 2784
+territories publishing Qualifications: BE BG CZ DE EE EL ES FI FR HR HU IT LT
+                                       LU LV MT NL PL PT RO SE SI SK UK
+critical extensions outside RECOGNISED_SERVICE_EXTENSIONS: none
+
+extension, and how many entries carry it        of those, marked Critical
+  AdditionalServiceInformation        5086        3810
+  Qualifications                      2481        1195
+  TakenOverBy                          892         256
+  ExpiredCertsRevocationInfo           300           0
+  URLContentTypeAndAuthorizedServiceList  50         0     (Slovakia's own)
+```
+
+**Half the published extensions are critical, and until now none of them was
+read at all.** TS 119 612 §5.5.9 makes `Critical="true"` the member state
+saying the entry may not be used by anyone who does not understand the
+extension — the same statement RFC 5280 §6.1.4 (o) makes about a certificate,
+and this project already enforces that one. 3810 `AdditionalServiceInformation`
+and 1195 `Qualifications` were being ignored while their services were loaded
+as anchors regardless.
+
+**Turning the rule on costs nothing today**, which is what this measurement
+decided. Every critical extension published is one of the four the project now
+processes, and no entry anywhere is refused. Slovakia's own
+`URLContentTypeAndAuthorizedServiceList` is the only unrecognised extension on
+any list and it is published non-critical, which is its author saying it may be
+ignored — so it is. `ecosystem-drift.test.ts` re-measures both numbers against
+the library's own `RECOGNISED_SERVICE_EXTENSIONS` rather than a copy of it, for
+the same reason the X.509 set is measured that way: a hand-maintained list here
+would drift into agreeing with itself.
+
+What the qualifier rules actually contain, from the same pass:
+
+```
+AdditionalServiceInformation URI          Qualifier URI
+  ForeSignatures              3344          QCWithQSCD             1098
+  ForeSeals                   1147          QCWithSSCD              590
+  ForWebSiteAuthentication     356          QCForESig               404
+  RootCA-QC                    186          QCStatement             402
+  (Hungary's own, at national                QCQSCDManagedOnBehalf   303
+   level)                       52          QCNoQSCD                199
+  QCQSCDManagedOnBehalf          1          QCForLegalPerson        174
+                                            NotQualified            172
+CriteriaList assert                         QCForESeal              144
+  atLeastOne                  2010          QCQSCDStatusAsInCert    105
+  all                          821          QCForWSA                 57
+  none                          52          QCSSCDStatusAsInCert     44
+                                            QCNoSSCD                 23
+criterion kind
+  PolicySet                   2605
+  KeyUsage                    1870
+  CriteriaList (nested)         99
+  CertSubjectDNAttribute        22
+  ExtendedKeyUsage               6
+```
+
+**Every form has to be implemented; none of them is a case that can be
+skipped.** All three `assert` values occur, including the `none` that Belgium
+uses to express `NotQualified` as "none of the qualifying policies", wrapped
+around an inner `atLeastOne` — which is also where the 99 nested `CriteriaList`
+elements come from. The two rare criteria are rare but not absent: Spain
+qualifies `QCForLegalPerson` by a private subject DN attribute
+(`1.3.6.1.4.1.18838.1.1`) and Slovakia qualifies `QCForWSA` by the server
+authentication EKU. Implementing only `PolicySet` and `KeyUsage` would cover
+99% of the rules and silently mis-qualify certificates under the other 28.
+
+**Twelve of the thirteen qualifier URIs TS 119 612 Annex D defines are in live
+use** — the drift test reports the distinct count each run, and it was 12 on
+2026-08-14. `QCQSCDManagedOnBehalf` also appears once as an
+`AdditionalServiceInformation` URI, which is a member state putting a
+certificate-level qualifier in a service-level field; it is carried as published
+rather than corrected.
+
+Note what this does **not** decide. A qualifier is reported to the caller and
+never enforced: `NotQualified` on a credential issuer is not a rejection,
+because an EUDI PID Provider need not be a QTSP and most are not. See README
+"Qualifiers and service extensions".
+
 ### Trust list freshness: what the lists declare about themselves, 2026-08-12
 
 Refusing a list past its own `NextUpdate` is only defensible if the live lists
