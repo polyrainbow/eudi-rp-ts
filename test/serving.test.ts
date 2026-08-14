@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
-import { type AddressInfo, type Socket, connect } from 'node:net';
+import { createServer, type RequestListener, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { Config } from '../app/config.ts';
@@ -346,8 +346,8 @@ describe('single-use response URI', () => {
 
 describe('graceful shutdown', () => {
   /** A bare server, so nothing here depends on the verifier's routes. */
-  async function listening(): Promise<Server> {
-    const server = createServer((_req, res) => res.end('ok'));
+  async function listening(handler?: RequestListener): Promise<Server> {
+    const server = createServer(handler ?? ((_req, res) => res.end('ok')));
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     return server;
   }
@@ -384,14 +384,30 @@ describe('graceful shutdown', () => {
   });
 
   it('exits non-zero on a second signal rather than waiting out the grace period', async () => {
-    const server = await listening();
     const codes: number[] = [];
-    // Never resolves on its own: an open connection holds `close` open, which
-    // is the situation an impatient operator is in.
-    const held = await new Promise<Socket>((resolve) => {
-      const { port } = server.address() as AddressInfo;
-      const socket = connect(port, '127.0.0.1', () => resolve(socket));
+    // A request the server has received and not answered: real work in flight,
+    // which is what holds `close` open and what an operator loses patience
+    // with. It has to be a request rather than a bare TCP connection, and the
+    // difference is a Node version apart — 22 and 24 keep `close` waiting on a
+    // connection that has never carried a request, 26 completes the close
+    // without it. On 26 that left this test signalling a shutdown that had
+    // already finished, so the second signal was asserting nothing. Holding a
+    // real request open is the situation the code is about and behaves the
+    // same on all three.
+    let arrived!: () => void;
+    const received = new Promise<void>((resolve) => {
+      arrived = resolve;
     });
+    let respond: (() => void) | undefined;
+    const server = await listening((_req, res) => {
+      respond = () => res.end('late');
+      arrived();
+    });
+    const { port } = server.address() as AddressInfo;
+    // Deliberately not awaited: it resolves only once the response is ended,
+    // which is after everything this test asserts.
+    const inFlight = fetch(`http://127.0.0.1:${port}/`).catch(() => undefined);
+    await received;
 
     const remove = installShutdownHandlers(server, {
       drainMs: 0,
@@ -409,7 +425,10 @@ describe('graceful shutdown', () => {
       assert.deepEqual(codes, [1]);
     } finally {
       remove();
-      held.destroy();
+      // Answer the held request before tearing the server down, so the fetch
+      // above settles rather than being left dangling on a destroyed socket.
+      respond?.();
+      await inFlight;
       server.closeAllConnections();
       server.close();
     }
