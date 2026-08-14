@@ -97,7 +97,7 @@ src/oid4vp/callbacks.ts   the crypto callbacks @openid4vc/openid4vp requires
 
 app/config.ts             environment -> library options
 app/audit.ts              verification events -> JSON lines on stdout
-app/http/                 server, in-memory session store
+app/http/                 server, session store, rate limit, shutdown
 app/main.ts               entry point
 app/public/index.html     the single page
 ```
@@ -269,9 +269,70 @@ deploy it as-is; use the library inside your own service.
 | `LOTL_SERVICE_TYPES` | all | e.g. `http://uri.etsi.org/TrstSvc/Svctype/CA/QC`. |
 | `ALLOWED_ALGS` | `ES256` | Credential signature algorithms accepted, e.g. `ES256,PS256`. Advertised to the wallet and enforced on the response. |
 | `LOTL_INSECURE_SKIP_FRESHNESS_CHECK` | `false` | Accept a trust list past its own `NextUpdate`, or declaring none. A stale list still grants services withdrawn since. Only for development, or when a missed republication upstream would otherwise be your outage. |
+| `SESSION_LIMIT` | `10000` | Most presentation sessions held at once. Beyond it, `/presentations` answers 503 `at_capacity` rather than evicting someone else's pending check. |
+| `RATE_LIMIT` / `RATE_LIMIT_WINDOW_MS` | `30` / `60000` | `POST /presentations` per client per window; 429 with `Retry-After` beyond it. `0` disables. Polling is not limited. |
+| `TRUSTED_PROXY_HOPS` | `0` | Proxies of *yours* in front of this server. `0` keys the rate limit on the socket address; behind a load balancer that is one key for everyone, so set the hop count. See below. |
+| `TRUST_REFRESH_MS` / `TRUST_REFRESH_RETRY_MS` | `43200000` / `300000` | Between successful trust list refreshes, and after a failed one — doubling per consecutive failure, capped at the interval. |
+| `SHUTDOWN_DRAIN_MS` / `SHUTDOWN_GRACE_MS` | `0` / `35000` | Keep serving this long after readiness starts failing, and the hard deadline for the whole shutdown. |
+
+Every numeric variable is parsed at startup and a value that is not a
+non-negative number is a startup failure. That is deliberate: `Number('1O000')`
+is `NaN`, every comparison against `NaN` is false, and a limit that silently
+enforces nothing is worse than no limit at all.
 
 **Pointing at a different wallet**: change `WALLET_SCHEME`. **A different trust
 list**: `LOTL_URL` plus `LOTL_SERVICE_TYPES`.
+
+### Serving it: limits, probes, shutdown
+
+Four things the demo server does that are about running rather than verifying.
+
+**Two limits, and they are different questions.** The rate limit is per client
+and refuses with 429: you are asking too often. The session cap is shared and
+refuses with 503 `at_capacity`: this instance is holding as many presentations
+as it will. Neither substitutes for the other — a per-client limit cannot bound
+what a large enough number of clients does, and a shared cap cannot tell one
+abusive caller from a crowd. Both guard `POST /presentations`, which is the
+endpoint where asking is cheaper than answering: each call mints a session,
+signs a request object and renders a QR code, and the caller has to hold none of
+it. Refusing a new session rather than evicting the oldest is the deliberate
+half of the cap, because evicting would let whoever is flooding cancel the
+checks of people who actually scanned a code.
+
+Behind a proxy, set `TRUSTED_PROXY_HOPS` to the number of hops **you** operate.
+`X-Forwarded-For` is a header, so trusting it by default would hand every caller
+a way to be a new client on every request; trusting nothing is safer but not
+safe, because then every request shares one socket address and the per-client
+limit becomes a global one. With `n` hops the client is the nth entry from the
+right, since appending is what a conforming proxy does — entries to the left of
+that are the client's own to write. Too few entries and the socket address is
+used instead of a value nothing vouched for.
+
+**`GET /healthz` and `GET /readyz` are different questions too.** Liveness is
+"is this process running" and answers 200 through both a lapsed trust list and a
+shutdown in progress — on purpose, because restarting the container fixes
+neither. Readiness answers 503 while draining, and 503 with
+`trust_anchors_stale` once the loaded lists are past their own `NextUpdate` and
+every refresh since has failed. That second state already existed and had no way
+to say so: the server would decline each presentation individually while
+reporting itself healthy.
+
+**Trust list refresh backs off.** A flat twelve-hour interval means a failure at
+hour zero is not retried until hour twelve, which is long enough to run past
+`NextUpdate` and take the verifier out of service over a blip that lasted a
+minute. Failures retry from `TRUST_REFRESH_RETRY_MS`, doubling per consecutive
+failure up to the interval, each delay jittered ±10% so instances started
+together do not synchronise on one Member State's endpoint.
+
+**SIGTERM drains rather than exits.** Node's default handler exits immediately,
+which severs every verification in flight — and by then the wallet has already
+posted and its `nonce` is spent, so the presentation cannot be retried and the
+person holding the phone sees a check that never answers. Instead: readiness
+fails, `SHUTDOWN_DRAIN_MS` passes (set it to at least your balancer's readiness
+interval; `0` is right with nothing in front), the listener closes, in-flight
+requests finish, and `SHUTDOWN_GRACE_MS` bounds the lot. A second signal exits
+immediately — an operator saying they are done waiting should get that rather
+than a SIGKILL from the platform.
 
 ### Three client identifier modes
 
@@ -363,8 +424,11 @@ policy qualifiers are read but not acted on — which §6.1.5 (f) leaves local.
   implemented (see below). Not implemented: the parts of TS 119 615 that turn a
   qualifier into a verdict — this project derives the qualifiers and reports
   them, and leaves what they oblige to the caller.
-- **Sessions are in memory** in the demo app. Restarting drops them, and more
-  than one instance breaks them. The library holds no state.
+- **Sessions are in memory** in the demo app, though no longer irreversibly:
+  `SessionStore` is an interface and `MemorySessionStore` is one implementation
+  of it, so a shared store is a class rather than a rewrite (see below).
+  Restarting still drops them, and more than one instance still breaks them,
+  until something implements it. The library holds no state either way.
 - **ES256 by default** — the whole of the EUDI reference deployment. ECDSA on
   three curves and RSA in six algorithms are implemented; widening the policy is
   a deliberate act (see below).
@@ -1147,12 +1211,26 @@ Any Docker host works the same way — Render, Railway, a VPS. The only two thin
 that matter are that `BASE_URL` is the public https URL and that the container
 can reach the internet if you use `TRUST_MODE=lotl`.
 
-Serverless platforms (Netlify, Vercel, Lambda) need code changes first: sessions
-live in an in-memory `Map`, so an ephemeral function would answer every
-presentation with `SESSION_UNKNOWN`. `SessionStore` is a concrete class that
-`createVerifierServer` constructs itself, so swapping it for a KV store means
-editing the server, not implementing an interface — extracting one is the first
-step, and it has not been taken.
+Serverless platforms (Netlify, Vercel, Lambda), and any deployment running more
+than one instance, need a shared session store: the default keeps sessions in a
+`Map`, so an ephemeral function would answer every presentation with
+`SESSION_UNKNOWN`. `SessionStore` in `app/http/session.ts` is the interface to
+implement, and `createVerifierServer` takes one — the in-memory implementation
+is a default, not a hard-coded dependency.
+
+Three properties of that interface are the contract, not incidental to it:
+
+- **Every operation is asynchronous**, reads included. A synchronous interface
+  would be implementable over a `Map` and over nothing else.
+- **`Session` is JSON-serialisable**, which is why `decryptionJwk` is a JWK
+  rather than a `KeyObject`. Note what that implies: a store outside the process
+  holds ephemeral response-decryption keys, so it is secret material at rest.
+- **`claimByResponseId` is atomic.** An OID4VP `nonce` is single use, and the
+  response URI is retired in the same step that hands over the session — so two
+  wallet posts arriving while the first verification is still fetching a status
+  list cannot both be verified. Over Redis that is one `GETDEL`, not a get and a
+  later delete. The interface deliberately offers no plain `getByResponseId`,
+  because an implementation that did would let a caller reintroduce the gap.
 
 Three things to expect on a fresh deployment:
 
@@ -1163,12 +1241,12 @@ Three things to expect on a fresh deployment:
   `auto_stop_machines = 'off'`. They restart on the next request, but in-memory
   sessions do not survive. Add a card, or expect to restart a check that sat
   idle.
-- **Run exactly one machine.** Sessions live in an in-memory `Map`, so with two
-  machines the wallet's POST and the browser's poll land on different instances
+- **Run exactly one machine.** With the default in-memory store and two
+  machines, the wallet's POST and the browser's poll land on different instances
   about half the time and the page shows `SESSION_EXPIRED` for a session that
   exists. `min_machines_running = 1` is a floor, not a cap — `fly launch`
-  provisions two by default, so run `fly scale count 1`. Scaling out needs a
-  shared session store first.
+  provisions two by default, so run `fly scale count 1`. Scaling out needs an
+  implementation of `SessionStore` that both machines share.
 
 ## What is proven against real infrastructure
 

@@ -32,8 +32,10 @@ about where it stops. Before relying on it for anything real, read
   What is not implemented is the rest of TS 119 615: turning a qualifier into a
   verdict is left to the caller's policy, deliberately, because an EUDI PID
   Provider need not be a QTSP.
-- **Sessions are in memory**, so a restart drops them and more than one
-  instance breaks them.
+- **Sessions are in memory** by default, so a restart drops them and more than
+  one instance breaks them. `SessionStore` is an interface and a shared
+  implementation can be passed in; note that a store outside this process holds
+  the ephemeral response-decryption keys, which is secret material at rest.
 - **The algorithm policy defaults to ES256**, which is what the EUDI reference
   deployment uses and narrower than eIDAS at large. ECDSA on three curves and
   RSA in six algorithms can be verified; accepting them is a deliberate

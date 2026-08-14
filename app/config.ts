@@ -44,6 +44,49 @@ export type Config = VerifierIdentity & {
    * inner deadline expires in turn.
    */
   verificationTimeoutMs: number;
+  limits: ServerLimits;
+  shutdown: ShutdownConfig;
+  trustRefresh: TrustRefreshConfig;
+};
+
+/** What one instance will hold and how fast it will let itself be asked. */
+export type ServerLimits = {
+  /** Most presentation sessions held at once; see `MemorySessionStore`. */
+  sessions: number;
+  /** `POST /presentations` allowed per client per window. Zero disables it. */
+  requestsPerWindow: number;
+  windowMs: number;
+  /**
+   * How many proxies of your own sit in front of this server.
+   *
+   * Zero — the default — means the socket address identifies the client, which
+   * is right when nothing is in front and wrong behind a load balancer, where
+   * every request then shares one key and the per-client limit becomes a global
+   * one. Set it to the number of hops you operate; `clientKey` explains why a
+   * count rather than a boolean.
+   */
+  trustedProxyHops: number;
+};
+
+export type ShutdownConfig = {
+  /** Serve on for this long after readiness starts failing. */
+  drainMs: number;
+  /** Hard deadline for the whole shutdown. */
+  graceMs: number;
+};
+
+export type TrustRefreshConfig = {
+  /** Between successful trust list refreshes. */
+  intervalMs: number;
+  /**
+   * After a failed one, doubling per consecutive failure up to `intervalMs`.
+   *
+   * A flat interval is the trap here: refreshing every twelve hours means a
+   * failure at hour zero is not retried until hour twelve, which is long enough
+   * to run past the lists' own `NextUpdate` and take the verifier out of
+   * service for a blip that lasted a minute.
+   */
+  retryMs: number;
 };
 
 export type TrustConfig = TrustListOptions & {
@@ -68,6 +111,25 @@ function env(name: string): string | undefined {
   return value === undefined || value === '' ? undefined : value;
 }
 
+/**
+ * A number from the environment, or the default, and never `NaN`.
+ *
+ * `Number(env(...) ?? fallback)` is the obvious spelling and it fails quietly
+ * in the worst place: a typo in `SESSION_LIMIT` yields `NaN`, every comparison
+ * against it is false, and the cap that was configured is simply not there. A
+ * misconfigured limit has to be a startup failure, because the alternative is a
+ * limit that reports itself as set and enforces nothing.
+ */
+function envNumber(name: string, fallback: number): number {
+  const raw = env(name);
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative number, got ${raw}`);
+  }
+  return value;
+}
+
 function envFile(name: string): string | undefined {
   const path = env(name);
   return path === undefined ? undefined : readFileSync(path, 'utf8');
@@ -84,7 +146,7 @@ function envPem(name: string): string | undefined {
 }
 
 export function loadConfig(): Config {
-  const port = Number(env('PORT') ?? 3000);
+  const port = envNumber('PORT', 3000);
   // OID4VP 1.0 §14.6 requires TLS. The server itself still listens on plain
   // HTTP — put a tunnel or reverse proxy in front and set BASE_URL to its
   // public URL, which is the address the wallet actually uses.
@@ -124,7 +186,7 @@ export function loadConfig(): Config {
     clientDnsName: env('CLIENT_DNS_NAME'),
     accessCertificateChainPem: envPem('ACCESS_CERT_CHAIN'),
     accessCertificatePrivateKeyPem: envPem('ACCESS_CERT_KEY'),
-    requestTtlSeconds: Number(env('REQUEST_TTL_SECONDS') ?? 300),
+    requestTtlSeconds: envNumber('REQUEST_TTL_SECONDS', 300),
     // Accepting a credential whose revocation status you did not check is
     // accepting a revoked one. Off only for an offline demo.
     checkStatus: env('STATUS_CHECK') !== 'false',
@@ -136,8 +198,36 @@ export function loadConfig(): Config {
     // Comfortably above a healthy round trip — the reference issuer's status
     // list and CRL answer in well under a second — and far below the sum of
     // every inner timeout, which is the number this exists to replace.
-    verificationTimeoutMs: Number(env('VERIFICATION_TIMEOUT_MS') ?? 30_000),
+    verificationTimeoutMs: envNumber('VERIFICATION_TIMEOUT_MS', 30_000),
     allowedAlgs: allowedAlgs.length > 0 ? allowedAlgs : DEFAULT_ALLOWED_ALGS,
+    limits: {
+      // Five minutes of requests at the default TTL, which is the ceiling
+      // expiry alone would leave. Generous for a demo and finite, which is the
+      // property that matters.
+      sessions: envNumber('SESSION_LIMIT', 10_000),
+      // A person scanning a QR code needs one of these, and needs it again only
+      // if they abandon the first. Thirty a minute leaves that far behind while
+      // staying a long way below what makes signing and QR rendering hurt.
+      requestsPerWindow: envNumber('RATE_LIMIT', 30),
+      windowMs: envNumber('RATE_LIMIT_WINDOW_MS', 60_000),
+      trustedProxyHops: envNumber('TRUSTED_PROXY_HOPS', 0),
+    },
+    shutdown: {
+      // Zero because the default deployment has nothing in front of this that
+      // polls readiness. Behind a load balancer, set it to at least that
+      // balancer's readiness interval.
+      drainMs: envNumber('SHUTDOWN_DRAIN_MS', 0),
+      // Above verificationTimeoutMs on purpose: a presentation that arrived
+      // just before the signal has already spent its nonce, so it is owed the
+      // deadline it was given rather than the time that happens to be left.
+      graceMs: envNumber('SHUTDOWN_GRACE_MS', 35_000),
+    },
+    trustRefresh: {
+      // A service withdrawn from a trusted list should not stay trusted until
+      // the next restart.
+      intervalMs: envNumber('TRUST_REFRESH_MS', 12 * 60 * 60 * 1000),
+      retryMs: envNumber('TRUST_REFRESH_RETRY_MS', 5 * 60 * 1000),
+    },
     trust: {
       mode: (env('TRUST_MODE') ?? 'pinned') as TrustConfig['mode'],
       pinnedAnchorsPem: envPem('TRUST_ANCHORS'),

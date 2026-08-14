@@ -6,6 +6,14 @@
 app = 'eudi-rp-ts'
 primary_region = 'fra'
 
+# Fly sends SIGTERM and then SIGKILL after kill_timeout, which defaults to 5s.
+# SHUTDOWN_GRACE_MS is 35s, above VERIFICATION_TIMEOUT_MS so that a presentation
+# arriving just before the signal gets the deadline it was given — and a wallet
+# that has already posted cannot retry, since its nonce is spent. Leaving the
+# default here would mean every redeploy killed exactly those requests, and the
+# drain logic would never once run to completion.
+kill_timeout = '40s'
+
 [build]
 [env]
   # Signed request objects (JAR) with the access certificate chain in x5c.
@@ -42,6 +50,17 @@ primary_region = 'fra'
   #
   # Running more than one machine requires a shared session store first.
   min_machines_running = 1
+
+# Readiness, not liveness: /readyz reports 503 while draining and once the
+# loaded trust lists are past their own NextUpdate with every refresh since
+# having failed. /healthz is the wrong endpoint to check here — it stays 200
+# through both, deliberately, because restarting fixes neither.
+[[http_service.checks]]
+  method = 'GET'
+  path = '/readyz'
+  interval = '15s'
+  timeout = '2s'
+  grace_period = '10s'
 
 [[vm]]
   size = 'shared-cpu-1x'
