@@ -141,7 +141,30 @@ export type VerifiedCredential = {
    * `ResolvedIssuer`. Nothing in this library rejects on it.
    */
   issuerQualification: ServiceQualification | undefined;
-  keyBinding: { audience: string; nonce: string } | undefined;
+  keyBinding: VerifiedKeyBinding | undefined;
+};
+
+/**
+ * What the holder's signature covered, beyond the fact that it verified.
+ *
+ * `audience` and `nonce` are what binds the presentation to this request. The
+ * transaction data hashes are what binds it to what the End-User agreed to
+ * (OID4VP 1.0 §B.3.3), and they are reported rather than checked here for the
+ * same reason the whole of `transaction_data` lives in `oid4vp/`: this function
+ * verifies one credential and knows nothing about the request that asked for
+ * it. `verifyPresentationResponse` is what holds both halves.
+ *
+ * They are surfaced at all because the Key Binding JWT is verified and then
+ * mostly discarded: before this, a hash the holder had signed was reachable by
+ * nobody, so a caller had no way to find out what the signature covered.
+ */
+export type VerifiedKeyBinding = {
+  audience: string;
+  nonce: string;
+  /** §B.3.3, base64url. Present only when the wallet returned any. */
+  transactionDataHashes?: readonly string[];
+  /** §B.3.3. Absent means the default, `sha-256` — not "unknown". */
+  transactionDataHashesAlg?: string;
 };
 
 export async function verifySdJwtVc(
@@ -371,7 +394,14 @@ export async function verifySdJwtVc(
         `Key Binding JWT aud is ${String(result.kb.payload.aud)}, expected ${options.keyBinding.audience}`,
       ));
     }
-    keyBinding = { audience: result.kb.payload.aud, nonce: result.kb.payload.nonce };
+    keyBinding = {
+      audience: result.kb.payload.aud,
+      nonce: result.kb.payload.nonce,
+      // Read off the payload @sd-jwt verified, never the unverified decode
+      // above: a hash taken from an unverified header is a hash the holder may
+      // not have signed, which is the whole value of the thing.
+      ...readTransactionDataClaims(result.kb.payload as Record<string, unknown>),
+    };
   } else if (requireKeyBinding) {
     return rejectWith(reject('KEY_BINDING_MISSING', 'Key binding required but no expectation supplied'));
   }
@@ -524,6 +554,31 @@ function mapLibraryError(
   // Either a signature was never reached, or both verified and what remains is
   // structural: an unreferenced disclosure, a bad digest, a wrong sd_hash.
   return reject('CREDENTIAL_MALFORMED', message);
+}
+
+/**
+ * The transaction data claims of a verified Key Binding JWT (OID4VP 1.0
+ * §B.3.3), in the shape `exactOptionalPropertyTypes` wants them spread in.
+ *
+ * Reported exactly as the wallet stated them, including an algorithm that is
+ * nonsense: what a hash means is a question about the request that asked for
+ * it, and this function has no access to one. Anything malformed enough not to
+ * be a list of strings is reported as absent, which is the same answer a wallet
+ * ignoring the request gives — and `TRANSACTION_DATA_MISSING` is the right
+ * outcome for both.
+ */
+function readTransactionDataClaims(
+  payload: Record<string, unknown>,
+): { transactionDataHashes?: readonly string[]; transactionDataHashesAlg?: string } {
+  const hashes = payload['transaction_data_hashes'];
+  if (!Array.isArray(hashes) || hashes.length === 0) return {};
+  if (!hashes.every((hash) => typeof hash === 'string')) return {};
+
+  const alg = payload['transaction_data_hashes_alg'];
+  return {
+    transactionDataHashes: hashes as string[],
+    ...(typeof alg === 'string' ? { transactionDataHashesAlg: alg } : {}),
+  };
 }
 
 /** The Key Binding JWT, which is the trailing `~`-separated segment if present. */

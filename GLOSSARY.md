@@ -303,6 +303,20 @@ replaced Presentation Exchange. **(used here)**
 **Presentation Exchange (PEX)** — the older `presentation_definition` query
 language. Superseded by DCQL but still widely supported.
 
+**Transaction data** — what the End-User is agreeing *to*, signed with the same
+key that proves possession of the credential (OID4VP 1.0 §5.1, §8.4). The DCQL
+query asks who someone is; transaction data asks what they authorise — this
+amount to this payee, this document hash — and binding the two into one
+signature is what turns a login into a mandate. The **type** is defined outside
+OID4VP, so it is the verifier's to write; the library defines none.
+**(used here)**
+
+**`transaction_data_hashes`** — how the answer comes back: base64url hashes of
+the transaction data, over the string as sent rather than the JSON it decodes
+to. In the **Key Binding JWT** for SD-JWT VC (§B.3.3), and in a device-signed
+**data element the type names** for mdoc (§B.2.1) — a difference worth knowing,
+because only the first has a fixed location. **(used here)**
+
 **VP Token / `vp_token`** — the response payload. In OID4VP 1.0 it is a JSON
 object keyed by DCQL credential query id, each value an array of presentations.
 **(used here)**

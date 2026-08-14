@@ -49,6 +49,18 @@ identifiers) and nothing in the verification path imports it. This was not alway
 naming its credential query ids, so a second query could be sent but never verified. A new
 question is a query and a predicate in `src/presets/`, never an edit to `oid4vp/`.
 
+`src/oid4vp/transaction-data.ts` applies the same rule to what a request *authorises* (OID4VP 1.0
+§5.1, §8.4). A transaction data **type** is defined outside the specification, so the library
+defines none and holds only what is not type-specific: encoding the entries onto the request,
+reading them back off it, and the §B.3.3 hash profile. Three things there are load-bearing. The
+hash covers the base64url string **as sent**, so `verifyPresentationResponse` reads the strings
+back off `requestPayload` rather than re-encoding the objects — the same reason it reads the query
+back, and re-encoding would compare against something the wallet never saw. `sha-256` is the
+default on each side independently, so a request naming an algorithm and a response naming none
+disagree. And mdoc has no fixed location for the hashes: §B.2.1 leaves the data element to the
+type, so the caller passes `mdocTransactionData` and a type missing from it **fails closed** —
+being unable to look is not evidence that the holder agreed.
+
 ### Two verification layers, kept apart
 
 `src/oid4vp/response.ts` is where they meet:
@@ -127,7 +139,13 @@ failure mode means adding or reusing a code, not a new error string.
 - `@sd-jwt/*` requires the KB-JWT `aud` to exist but never compares it to the verifier's own
   identifier. `src/verify.ts` checks it explicitly, twice (before and after library verification).
   Key binding is verified only when a nonce is supplied, which is why `verifySdJwtVc` throws
-  rather than defaulting `requireKeyBinding`.
+  rather than defaulting `requireKeyBinding`. It also surfaces the KB-JWT's transaction data
+  claims on `VerifiedKeyBinding`, read from the payload the library *verified* rather than from
+  the unverified decode above it — a hash nobody's key signed authorises nothing.
+- `@openid4vc/openid4vp` parses `transaction_data` and ships a `verifyTransactionData`, but does
+  not call it during response validation and cannot: its `credentials` argument is the hashes
+  already extracted from each presentation, which is the half only a credential verifier can do.
+  Same shape as the two gaps above it.
 - `xml-crypto` ships no RSASSA-PSS, which several member states' trust lists use.
   `src/trust/lotl.ts` implements it. Its `checkSignature` also never says *which*
   element the signature covered — only that the references are intact — so
@@ -237,7 +255,9 @@ is.
 
 `src/events.ts` emits typed events and **carries no personal data by construction** — no claim
 values, no subject identifiers, no credential bytes. `test/hardening.test.ts` asserts it. Keep new
-event fields non-identifying.
+event fields non-identifying. `transaction.authorised` is the case that shows where the line is:
+it carries the transaction data `type` values, which this verifier chose before the wallet was
+involved, and never the hashes or the data itself, which are a record of what somebody did.
 
 Two invariants there, both pinned by tests in the same file:
 
@@ -298,7 +318,10 @@ round trip offline.
 - `test/generic-query.test.ts` is the genericity test: every query in it is one no preset builds,
   driven end to end through `buildAuthorizationRequest` and `verifyPresentationResponse`. If a new
   question ever needs a change in `src/` to work, that file is where it should have been provable
-  without one.
+  without one. `test/transaction-data.test.ts` is the same test for what a request *authorises* —
+  every type in it is one nothing in `src/` has heard of — and it computes its hashes with
+  `node:crypto` directly rather than with the library's own helper, so it cannot agree with the
+  implementation about the detail §B.3.3 is easiest to get wrong.
 - `test/serving.test.ts` covers the demo server's operational surface — limits, probes, the
   single-use response URI, shutdown — none of which is credential verification, which is why it
   needs tests of its own. It is also the only place that drives `installShutdownHandlers`, so it

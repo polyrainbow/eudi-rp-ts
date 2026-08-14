@@ -6,6 +6,7 @@ import { DEFAULT_ALLOWED_ALGS } from '../crypto.ts';
 import { coseAlgIdentifiers } from '../mdoc/cose.ts';
 import { createEncryptJwe, createSignJwt, generateRandom, hashCallback, requestSigningAlg } from './callbacks.ts';
 import { type DcqlQuery, queryFormats } from './query.ts';
+import { type TransactionDataEntry, encodeTransactionData } from './transaction-data.ts';
 
 const b64url = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
 
@@ -26,6 +27,26 @@ export type BuiltRequest = {
   responseId: string;
 };
 
+export type AuthorizationRequestOptions = {
+  /**
+   * Transaction data to be authorised alongside the credentials (OID4VP 1.0
+   * §5.1), if this request asks the End-User to agree to something rather than
+   * only to identify themselves.
+   *
+   * An argument for the same reason the DCQL query is one: a transaction data
+   * type is defined outside this specification, so it is the caller's to write.
+   * The library encodes what it is given, checks that each entry names a
+   * Credential Query the request actually asks for, and — on the way back —
+   * checks the hashes against the strings that were sent.
+   *
+   * Sending it commits the wallet: one that does not support the parameter MUST
+   * refuse the whole request (§8.4), and one that does must bind it into the
+   * presentation, or `verifyPresentationResponse` rejects with
+   * `TRANSACTION_DATA_MISSING`.
+   */
+  transactionData?: readonly TransactionDataEntry[];
+};
+
 /**
  * Build an OID4VP 1.0 authorization request for a DCQL query.
  *
@@ -34,7 +55,9 @@ export type BuiltRequest = {
  * `ageOver18Query` itself, so one question was wired into the request builder
  * and, through the credential query ids, into the response verifier as well.
  * `verifyPresentationResponse` reads the query back off the payload returned
- * here, so whatever is asked is what the answer gets checked against.
+ * here, so whatever is asked is what the answer gets checked against. The same
+ * holds for `options.transactionData`, which is the other thing a request can
+ * ask and the other thing the response is checked against.
  *
  * Two shapes, selected by config:
  *
@@ -55,6 +78,7 @@ export type BuiltRequest = {
 export async function buildAuthorizationRequest(
   config: VerifierIdentity,
   query: DcqlQuery,
+  options: AuthorizationRequestOptions = {},
 ): Promise<BuiltRequest> {
   const nonce = b64url(generateRandom(32));
   const state = b64url(generateRandom(32));
@@ -93,6 +117,12 @@ export async function buildAuthorizationRequest(
     nonce,
     state,
     dcql_query: query,
+    // Encoded once, here, and read back as these exact strings when the
+    // response arrives: §B.3.3 hashes the string the wallet received, so a
+    // second encoding of the same objects is a different question.
+    ...(options.transactionData
+      ? { transaction_data: encodeTransactionData(options.transactionData, query) }
+      : {}),
     client_metadata: {
       client_name: config.clientName ?? 'eudi-rp-ts verifier',
       // Every format the DCQL query asks for MUST appear here, and only those:

@@ -57,6 +57,27 @@ export type ReasonCode =
    * the other sends an operator to argue with a holder about a wallet bug.
    */
   | 'REQUESTED_CLAIMS_MISSING'
+  /**
+   * The request carried transaction data (OID4VP 1.0 §5.1) naming this
+   * credential, and the presentation binds none of it — so the holder proved
+   * who they are and authorised nothing.
+   *
+   * In the `KEY_BINDING_*` family rather than beside `REQUESTED_CLAIMS_MISSING`
+   * on purpose: this is not a claim the wallet failed to disclose, it is the
+   * holder's signature failing to cover what it was asked to cover. A wallet
+   * that does not support `transaction_data` is required to refuse the request
+   * outright (§8.4), so a presentation arriving without the binding means
+   * nobody agreed to anything.
+   */
+  | 'TRANSACTION_DATA_MISSING'
+  /**
+   * The presentation binds transaction data that is not what was sent — a hash
+   * over different bytes, or one computed with an algorithm the request did not
+   * offer. Distinct from `TRANSACTION_DATA_MISSING`, and the distinction is the
+   * one an operator acts on: nothing was forgotten, the End-User authorised
+   * some other transaction.
+   */
+  | 'TRANSACTION_DATA_MISMATCH'
   // The predicate we were asked to prove
   | 'PREDICATE_CLAIM_MISSING'
   | 'PREDICATE_NOT_SATISFIED'

@@ -246,6 +246,79 @@ verifier had no basis to ask for, and verifying it is the act of collecting it.
 **The demo in `app/` is a demo.** In-memory sessions, no auth, one page. Do not
 deploy it as-is; use the library inside your own service.
 
+### Authorising a transaction, not just identifying someone
+
+A verified presentation says *this holder, holding a credential we trust,
+answered this nonce for this verifier*. That is identification. Transaction data
+(OID4VP 1.0 §5.1, §8.4) makes the same signature also say *and they agreed to
+this* — this amount to this payee, this document hash — which is what a payment
+authorisation or a QES signing needs and what a login does not.
+
+It is a second argument to `buildAuthorizationRequest`, for the same reason the
+query is the first: §5.1 leaves the `type` and every parameter beyond `type` and
+`credential_ids` out of scope, so a transaction data type is yours to write.
+
+```ts
+const request = await buildAuthorizationRequest(identity, query, {
+  transactionData: [
+    {
+      type: 'urn:example:payment',        // yours; §5.1 recommends a collision-resistant name
+      credential_ids: ['holder_name'],    // which Credential Query may authorise it
+      payee: 'Kaffeehaus Sperl',
+      amount: '4.20',
+      currency: 'EUR',
+    },
+  ],
+});
+```
+
+Sending it commits the wallet: one that does not support the parameter MUST
+refuse the whole request (§8.4), and one that does must bind it into the
+presentation. `verifyPresentationResponse` reads the entries back off the
+request payload and checks each one against the credential that answers it —
+`TRANSACTION_DATA_MISSING` when the presentation binds none of it,
+`TRANSACTION_DATA_MISMATCH` when it binds something else. Nothing else changes:
+the check is per credential, after that credential has verified, because a hash
+signed by a key we do not trust authorises nothing.
+
+Two details of the hash profile (§B.3.3) are load-bearing and easy to get wrong:
+
+- **The hash covers the base64url string as sent**, not the JSON it decodes to —
+  "base64url decoding is not performed before hashing". Two encoders that
+  disagree about key order produce different strings and different hashes, which
+  is why the strings that were sent are read back off the payload rather than
+  re-encoded from the objects that produced them. Same discipline as the query.
+- **`sha-256` is the default on both sides independently.** A request stating no
+  algorithm requires sha-256; a response stating none has used it. So a request
+  asking for `sha-384` and a response that names nothing do not agree, and that
+  is a mismatch rather than a detail to paper over. `SUPPORTED_HASH_ALGORITHMS`
+  is exported: an algorithm outside it is refused while the request is still
+  being built, since a hash we cannot compute is one nothing could accept.
+
+**mdoc needs one thing more.** §B.3.3 fixes two Key Binding JWT claims for
+SD-JWT VC, so nothing has to be configured there. §B.2.1 fixes nothing for mdoc:
+"It is RECOMMENDED that each transaction data type defines a data element
+(`NameSpace`, `DataElementIdentifier`, `DataElementValue`)". There is no
+universal place to look, so the type's author says where and you pass it on:
+
+```ts
+const outcome = await verifyPresentationResponse(
+  {
+    ...context,
+    mdocTransactionData: {
+      'urn:example:payment': { namespace: 'urn:example:payment', element: 'transaction_data' },
+    },
+  },
+  authorizationResponse,
+);
+```
+
+A type with no entry here **fails closed** — `TRANSACTION_DATA_MISSING`, not
+acceptance with the binding unread, because being unable to look is not evidence
+that the holder agreed. `PresentedCredential.deviceSignedClaims` carries the
+device-signed elements either way, so a type whose processing rules are stranger
+than a hash is still checkable by the caller against bytes the holder signed.
+
 ## Configuration
 
 | Variable | Default | Notes |
@@ -400,7 +473,10 @@ SD-JWT VC media types
 `dc+sd-jwt` and transitional `vc+sd-jwt` (draft-18); OID4VP 1.0 request and
 response shapes, DCQL, `direct_post` and `direct_post.jwt`; Key Binding JWT with
 `sd_hash`, `nonce`, and `aud` equal to the full prefixed Client Identifier
-(§14.8); x5c chain signature linkage and certificate validity windows; ETSI TS
+(§14.8); transaction data (§5.1, §8.4) with the hash profile of §B.3.3, checked
+per credential against the strings the request carried — for mdoc (§B.2.1) the
+data element is named by the transaction data type, so the caller supplies its
+location and a type without one fails closed (see above); x5c chain signature linkage and certificate validity windows; ETSI TS
 119 612 trust list signature verification, including RSASSA-PSS and ECDSA.
 
 **Certificate path validation is RFC 5280 §6.1 in full**: validity windows,

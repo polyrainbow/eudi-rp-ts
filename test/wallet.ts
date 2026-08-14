@@ -22,6 +22,12 @@ export type PresentOptions = {
   audience: string;
   /** Override to test a wallet that discloses the wrong thing. */
   presentationFrame?: object;
+  /**
+   * Extra top-level Key Binding JWT claims — what a wallet adds when the
+   * request carried something to authorise, `transaction_data_hashes` and
+   * `transaction_data_hashes_alg` being the pair OID4VP 1.0 §B.3.3 defines.
+   */
+  kbClaims?: Record<string, unknown>;
 };
 
 /**
@@ -60,6 +66,7 @@ export async function presentAgeOver18(options: PresentOptions): Promise<string>
           iat: Math.floor(Date.now() / 1000),
           aud: options.audience,
           nonce: options.nonce,
+          ...options.kbClaims,
         },
       },
     },

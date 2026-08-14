@@ -56,6 +56,21 @@ export type VerificationEvent =
       via: 'crl' | 'ocsp' | undefined;
     }
   /**
+   * The holder's signature covered transaction data this verifier sent, and it
+   * covered the data that was actually sent (OID4VP 1.0 §5.1, §B.3.3). Emitted
+   * per credential that authorised something, and not at all when a request
+   * asked for no authorisation.
+   *
+   * This is the event a record of an *authorisation* turns on, as against a
+   * record of an identification: without it the trail cannot distinguish a
+   * presentation that proved who someone is from one by which they agreed to
+   * pay. `types` carries the type identifiers this verifier put in the request
+   * — its own vocabulary, chosen before the wallet was involved — and never the
+   * hashes or the transaction data itself, which are the parts that describe
+   * what somebody did.
+   */
+  | { type: 'transaction.authorised'; format: CredentialFormat; types: readonly string[] }
+  /**
    * `credentialTypes` is a list because one verification can cover more than
    * one credential: `verifyPresentationResponse` verifies everything a DCQL
    * query asked for and reaches a single verdict over the set. The

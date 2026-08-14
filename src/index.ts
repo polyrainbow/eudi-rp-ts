@@ -24,6 +24,7 @@ export type {
   AgeResult,
   KeyBindingExpectation,
   VerifiedCredential,
+  VerifiedKeyBinding,
   VerifySdJwtVcOptions,
 } from './verify.ts';
 
@@ -123,9 +124,29 @@ export type { HandoverParameters } from './mdoc/session-transcript.ts';
 
 // OID4VP: build a request for a query, validate the response against it.
 export { buildAuthorizationRequest } from './oid4vp/request.ts';
-export type { BuiltRequest } from './oid4vp/request.ts';
+export type { AuthorizationRequestOptions, BuiltRequest } from './oid4vp/request.ts';
+// Transaction data (OID4VP 1.0 §5.1): what the End-User authorises, bound to
+// the key that proves possession of the credential. The library defines no
+// type — a type is the caller's, exactly as a DCQL query is — so what is
+// exported is the encoding, the hash profile of §B.3.3, and the set of hash
+// algorithms it can actually compute.
+export {
+  DEFAULT_HASH_ALGORITHM,
+  SUPPORTED_HASH_ALGORITHMS,
+  decodeTransactionData,
+  encodeTransactionData,
+  readTransactionData,
+  transactionDataHash,
+  unauthorisedTransaction,
+} from './oid4vp/transaction-data.ts';
+export type {
+  TransactionDataBinding,
+  TransactionDataEntry,
+  TransactionDataFailure,
+} from './oid4vp/transaction-data.ts';
 export { verifyPresentationResponse } from './oid4vp/response.ts';
 export type {
+  MdocTransactionDataElement,
   PredicateResult,
   PresentationContext,
   PresentationPredicate,

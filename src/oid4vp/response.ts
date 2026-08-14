@@ -19,6 +19,13 @@ import {
 } from './query.ts';
 import { verifyDeviceResponse } from '../mdoc/device-response.ts';
 import { buildSessionTranscript, jwkThumbprint } from '../mdoc/session-transcript.ts';
+import {
+  type TransactionDataBinding,
+  type TransactionDataEntry,
+  decodeTransactionData,
+  readTransactionData,
+  unauthorisedTransaction,
+} from './transaction-data.ts';
 
 /** Which credential format actually answered. */
 export type PresentedFormat = CredentialFormat;
@@ -38,7 +45,37 @@ export type PresentedCredential = VerifiedCredential & {
   /** The `id` of the Credential Query this answers, and its `vp_token` key. */
   queryId: string;
   format: PresentedFormat;
+  /**
+   * mdoc only: the data elements the *device* signed, outside the issuer's
+   * signature, keyed by namespace.
+   *
+   * Named after the mdoc structure it comes from rather than given a
+   * format-neutral name, because it has no counterpart in SD-JWT VC — where the
+   * equivalent is the Key Binding JWT's own claims, on `keyBinding`. It is here
+   * because it is where an mdoc transaction data type puts what the holder
+   * agreed to (OID4VP 1.0 §B.2.1), so a caller checking a type this library was
+   * not told how to find still has the signed bytes to check it against.
+   */
+  deviceSignedClaims?: Record<string, Record<string, unknown>>;
 };
+
+/**
+ * Where an mdoc carries the transaction data hashes for one type.
+ *
+ * OID4VP 1.0 §B.2.1 leaves this to the type: "It is RECOMMENDED that each
+ * transaction data type defines a data element (`NameSpace`,
+ * `DataElementIdentifier`, `DataElementValue`) to be used to return the
+ * processed transaction data." There is no universal location to look in, which
+ * is the difference from SD-JWT VC, where §B.3.3 names two Key Binding JWT
+ * claims and every type reuses them.
+ *
+ * So the type's author says where, and — since a type is the caller's, exactly
+ * as a DCQL query is — the caller passes it here. The element's value is read
+ * as the same two fields §B.3.3 defines: either an array of hashes, or an
+ * object carrying `transaction_data_hashes` and optionally
+ * `transaction_data_hashes_alg`.
+ */
+export type MdocTransactionDataElement = { namespace: string; element: string };
 
 /** What the wallet returned, before any predicate is applied to it. */
 export type PresentedCredentials = {
@@ -130,6 +167,22 @@ export type PresentationContext<T = undefined> = {
    * is a second thing to keep in step.
    */
   query?: DcqlQuery;
+  /**
+   * Where each mdoc transaction data type carries its hashes, keyed by the
+   * type's `type` value.
+   *
+   * Needed only when a request carried `transaction_data` naming a Credential
+   * Query in the mdoc format; SD-JWT VC needs nothing here, because §B.3.3
+   * fixes the location. A type named by no entry here **fails closed**: the
+   * presentation is rejected with `TRANSACTION_DATA_MISSING` rather than
+   * accepted with the binding unread, because "we could not find it" and "the
+   * holder authorised it" are not the same statement.
+   *
+   * The transaction data itself is read back off `requestPayload`, like the
+   * query. This is the one part that cannot be, because it is knowledge about a
+   * type rather than about the request.
+   */
+  mdocTransactionData?: Readonly<Record<string, MdocTransactionDataElement>>;
   /**
    * A rule over the verified credentials, evaluated before the verdict.
    *
@@ -261,6 +314,37 @@ export async function verifyPresentationResponse<T = undefined>(
     return rejectWith(reject('RESPONSE_INVALID', `Response answers "${surplus}", which the query did not need`));
   }
 
+  // The other thing the request can ask, read back off it for the same reason
+  // the query is: §B.3.3 hashes the string the wallet received, so the strings
+  // that were sent are the only ones a hash can be checked against.
+  let transactions: readonly { encoded: string; entry: TransactionDataEntry }[];
+  try {
+    transactions = (readTransactionData(context.requestPayload) ?? []).map((encoded) => ({
+      encoded,
+      entry: decodeTransactionData(encoded),
+    }));
+  } catch (error) {
+    return rejectWith(
+      reject('RESPONSE_INVALID', `Stored request payload carries unreadable transaction_data: ${errorMessage(error)}`),
+    );
+  }
+
+  // Before anything is verified, on the same reasoning as `unsatisfiedRequirement`
+  // above: an entry naming a credential the query does not ask for describes an
+  // authorisation no answer to this request could ever carry, and finding that
+  // out after verifying the credentials would report it as the wallet's fault.
+  const dangling = transactions.find((transaction) =>
+    transaction.entry.credential_ids.some((id) => !credentialQueryById(query, id)),
+  );
+  if (dangling) {
+    return rejectWith(
+      reject(
+        'RESPONSE_INVALID',
+        `transaction_data entry "${dangling.entry.type}" authorises a credential the query does not ask for`,
+      ),
+    );
+  }
+
   const credentials: PresentedCredential[] = [];
   const byQueryId: Record<string, PresentedCredential[]> = {};
   const innerEvents = withoutVerdict(emit);
@@ -290,6 +374,21 @@ export async function verifyPresentationResponse<T = undefined>(
           reject('REQUESTED_CLAIMS_MISSING', `"${queryId}": ${missing}`),
           credentialQuery.format,
         );
+      }
+
+      // And that the holder authorised what they were asked to authorise. Last
+      // of the per-credential checks because it is the only one that is about
+      // neither the credential nor the query but about a third document, and
+      // because it is worth asking only of a credential that verified: a hash
+      // signed by a key we do not trust authorises nothing.
+      const authorised = authorisedTransactions(transactions, context, verified.value);
+      if (!authorised.verified) return rejectWith(authorised, credentialQuery.format);
+      if (authorised.value.length > 0) {
+        emit({
+          type: 'transaction.authorised',
+          format: credentialQuery.format,
+          types: authorised.value,
+        });
       }
 
       credentials.push(verified.value);
@@ -333,6 +432,95 @@ export async function verifyPresentationResponse<T = undefined>(
 function soleFormat(credentials: readonly PresentedCredential[]): PresentedFormat | undefined {
   const formats = new Set(credentials.map((credential) => credential.format));
   return formats.size === 1 ? [...formats][0] : undefined;
+}
+
+/**
+ * Which transactions this credential authorised, or why it authorised none.
+ *
+ * Every entry naming this credential's Credential Query must be bound by it;
+ * entries naming only other credentials are not this one's to answer, and a
+ * request carrying no transaction data reaches an empty list without asking
+ * anything.
+ *
+ * The returned value is the list of `type` values, for the audit trail. It is
+ * the verifier's own vocabulary rather than anything the wallet chose, which is
+ * what makes it safe to record — see `src/events.ts`.
+ */
+function authorisedTransactions(
+  transactions: readonly { encoded: string; entry: TransactionDataEntry }[],
+  context: PresentationContext<unknown>,
+  credential: PresentedCredential,
+): Outcome<readonly string[]> {
+  const authorised: string[] = [];
+
+  for (const { encoded, entry } of transactions) {
+    if (!entry.credential_ids.includes(credential.queryId)) continue;
+
+    const binding =
+      credential.format === 'dc+sd-jwt'
+        ? keyBindingTransactionData(credential)
+        : mdocTransactionData(entry, context, credential);
+
+    const failure = unauthorisedTransaction(encoded, entry, binding);
+    if (failure) {
+      // The three kinds are three different states, and each is a code that
+      // already means what it needs to: nothing was signed, something else was
+      // signed, or it was signed with an algorithm we cannot recompute. Derived
+      // from which check failed, never from what any message said.
+      const reason =
+        failure.kind === 'missing'
+          ? 'TRANSACTION_DATA_MISSING'
+          : failure.kind === 'mismatch'
+            ? 'TRANSACTION_DATA_MISMATCH'
+            : 'UNSUPPORTED_ALGORITHM';
+      return reject(reason, `"${credential.queryId}": ${failure.detail}`);
+    }
+    authorised.push(entry.type);
+  }
+
+  return accept(authorised);
+}
+
+/** SD-JWT VC: two claims in the Key Binding JWT the holder signed (§B.3.3). */
+function keyBindingTransactionData(credential: PresentedCredential): TransactionDataBinding | undefined {
+  const hashes = credential.keyBinding?.transactionDataHashes;
+  if (!hashes) return undefined;
+  return { hashes, alg: credential.keyBinding?.transactionDataHashesAlg };
+}
+
+/**
+ * mdoc: a device-signed data element the transaction data type names (§B.2.1).
+ *
+ * Returns `undefined` — which is `TRANSACTION_DATA_MISSING` — both when the
+ * caller told us nothing about this type and when the element is simply absent.
+ * They are the same answer to the only question being asked: is there a hash,
+ * inside the holder's signature, that this verifier can check. Being unable to
+ * look is not evidence that the holder agreed.
+ */
+function mdocTransactionData(
+  entry: TransactionDataEntry,
+  context: PresentationContext<unknown>,
+  credential: PresentedCredential,
+): TransactionDataBinding | undefined {
+  const location = context.mdocTransactionData?.[entry.type];
+  if (!location) return undefined;
+
+  const value = credential.deviceSignedClaims?.[location.namespace]?.[location.element];
+  if (value === undefined) return undefined;
+
+  // Two shapes, because §B.2.1 defines neither: a bare list of hashes, or the
+  // §B.3.3 pair carried as a map. Anything else is read as absent rather than
+  // guessed at.
+  if (Array.isArray(value)) {
+    return value.every((hash) => typeof hash === 'string') ? { hashes: value, alg: undefined } : undefined;
+  }
+  if (typeof value !== 'object' || value === null) return undefined;
+
+  const record = value instanceof Map ? Object.fromEntries(value) : (value as Record<string, unknown>);
+  const hashes = record['transaction_data_hashes'];
+  if (!Array.isArray(hashes) || !hashes.every((hash) => typeof hash === 'string')) return undefined;
+  const alg = record['transaction_data_hashes_alg'];
+  return { hashes, alg: typeof alg === 'string' ? alg : undefined };
 }
 
 /**
@@ -506,6 +694,11 @@ async function verifyMdocPresentation(
     credentialType: result.value.docType,
     issuerCertificateSubject: result.value.issuerCertificateSubject,
     issuerQualification: result.value.issuerQualification,
+    // Inside the device signature, and the only place an mdoc transaction data
+    // type has to put what the holder agreed to (OID4VP 1.0 §B.2.1). Dropping
+    // it here is what used to make transaction data unverifiable for mdoc
+    // whatever the caller knew about the type.
+    deviceSignedClaims: result.value.deviceSignedClaims,
     // mdoc binds the holder through the device signature over the session
     // transcript rather than a Key Binding JWT; verifyDeviceResponse has
     // already established the equivalent guarantee.
