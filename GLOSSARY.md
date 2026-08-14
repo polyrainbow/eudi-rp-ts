@@ -68,8 +68,42 @@ wallet use cases ahead of the regulation applying.
 **Issuer** / **Attestation Provider** — signs and issues credentials. A **PID
 Provider** issues the PID specifically.
 
-**Holder** — the person. Their **Wallet Unit** (or Wallet Instance) holds
-credentials and the private keys bound to them.
+**EAASP** / **QEAASP** — (Qualified) Electronic Attestation of Attributes
+Service Provider: an Attestation Provider in its eIDAS guise, issuing **EAA**
+and, when qualified, **QEAA**. The prefix is the whole distinction and it is
+legal rather than technical: a QEAASP is a **QTSP**, audited against its own
+practice statement and attestation policies and listed on a trusted list, while
+a plain EAASP is any commercial party issuing attestations and is audited by
+nobody. Both sign credentials a verifier reads identically, so the difference
+shows up only in whether the issuer's certificate chains to an anchor you trust
+and what an audit stands behind the claims — never in the credential format.
+
+Worth keeping in view: nothing in law requires an EAASP to issue into a Wallet
+Unit. An EAA can go to another kind of wallet — the European Business Wallet is
+the intended case — or be emailed or downloaded, using the same formats and
+protocols. See the Wallet Unit entry below for why that matters to a verifier.
+
+**Holder** — the person. Their **Wallet Unit** holds credentials and the private
+keys bound to them.
+
+**Wallet Unit** / **Wallet Instance** / **WSCA** / **WSCD** — the wallet, in the
+four parts ARF Annex 1 splits it into. The **Wallet Unit** is the whole
+configuration a Wallet Provider issues to one user; the **Wallet Instance** is
+only the installed app; the **Wallet Secure Cryptographic Application (WSCA)**
+manages the critical assets; and the **Wallet Secure Cryptographic Device
+(WSCD)** is the tamper-resistant device the WSCA is linked to — a secure
+element, eUICC, external smartcard or remote HSM — which protects those assets
+and performs the cryptography. The keys live in the WSCD, not in the Instance,
+which is why "Wallet Unit" and "Wallet Instance" are not interchangeable.
+
+None of this reaches a verifier. Holder binding proves possession of the key in
+`cnf` (SD-JWT VC) or `DeviceKey` (mdoc) — that whatever signed is what the
+issuer bound — and says nothing about where that key lives. ARF §6.6.3.11 is
+explicit that the Relying Party has no way to verify the Wallet Unit or the
+Wallet Provider and instead trusts the issuer to have done so at issuance; see
+[ARF issue #664](https://github.com/eu-digital-identity-wallet/eudi-doc-architecture-and-reference-framework/issues/664)
+for the argument that this delegation is unsound, and `REPRODUCE.md` section 5
+for the reference deployment not enforcing the key attestation it advertises.
 
 **Verifier** / **Relying Party (RP)** — asks the holder for a presentation and
 checks it. **This project is a Relying Party.** **(used here)**
@@ -92,7 +126,8 @@ credential: name, birth date, nationality. `vct` is `urn:eudi:pid:1`.
 
 **EAA / QEAA / PubEAA** — Electronic Attestation of Attributes, and its
 Qualified and Public-body variants. Any non-PID credential: a diploma, an IBAN,
-a health card. Qualification is a legal status, not a technical one.
+a health card. Qualification is a legal status, not a technical one — it
+describes the issuer, the **EAASP**, and not the bytes.
 
 ---
 
@@ -500,4 +535,6 @@ failure path ends at exactly one, so callers never parse error strings.
 | **JAR** — signed *request* | **JARM** — encrypted/signed *response* |
 | **JAR** — signs the request parameters | **PAR** — moves them to a back channel |
 | **WUA** — about the wallet unit and its keys, sent to the *credential* endpoint | **WIA** — about the app instance, sent to the *token* endpoint |
+| **WSCD** — the tamper-resistant device holding the keys | **WSCA** — the application managing them, linked to the WSCD |
+| **Wallet Unit** — Instance plus WSCA plus WSCD, what a provider issues | **Wallet Instance** — the installed app alone, which holds no keys |
 | **Registrar** — approves and registers you | **Access CA** — issues your certificate |
