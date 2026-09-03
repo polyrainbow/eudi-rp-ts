@@ -239,7 +239,7 @@ describe('the live trusted lists', { skip }, () => {
     const unbounded: string[] = [];
     const lapsed: string[] = [];
     const unimplementedForms = new Set<string>();
-    const criticalAndRejected = new Set<string>();
+    const withUnreadCriticalExtensions: { certificate: X509Certificate; oids: string[] }[] = [];
     const anchors: X509Certificate[] = [];
     const unreachable: string[] = [];
     const withDoctype: string[] = [];
@@ -335,16 +335,25 @@ describe('the live trusted lists', { skip }, () => {
           }
         }
 
-        // Which extensions are marked critical that RFC 5280 §6.1.4 (o) now
-        // makes this project *reject*. Measured against the library's own set
-        // rather than a copy of it: a hand-maintained list here would drift
-        // from the rule it claims to be measuring, and agreeing with itself is
-        // exactly the failure mode a drift test cannot have.
+        // Which extensions are marked critical that RFC 5280 §6.1.4 (o) leaves
+        // unread. Measured against the library's own set rather than a copy of
+        // it: a hand-maintained list here would drift from the rule it claims
+        // to be measuring, and agreeing with itself is exactly the failure mode
+        // a drift test cannot have.
+        //
+        // Collected per certificate rather than reduced to OIDs here, because
+        // whether an OID costs anything depends on the certificate carrying it
+        // and that cannot be answered until every list has been read. See the
+        // pass after the loop.
+        const unread: string[] = [];
         for (const extension of AsnConvert.parse(entry.certificate.raw, Certificate).tbsCertificate
           .extensions ?? []) {
           if (extension.critical && !RECOGNISED_CRITICAL_EXTENSIONS.has(extension.extnID)) {
-            criticalAndRejected.add(extension.extnID);
+            unread.push(extension.extnID);
           }
+        }
+        if (unread.length > 0) {
+          withUnreadCriticalExtensions.push({ certificate: entry.certificate, oids: unread });
         }
 
         // Certificate policies, read on every certificate rather than only the
@@ -382,6 +391,36 @@ describe('the live trusted lists', { skip }, () => {
       }
     }
 
+    // What an unread critical extension actually costs, which is two different
+    // answers and only one of them is a rejection.
+    //
+    // §6.1.4 (o) exempts the trust anchor, and every certificate measured above
+    // is one — it was published on a trusted list. So a critical extension here
+    // costs nothing until the certificate can appear *below* an anchor in a
+    // presented chain, and that needs its own issuer to be on a list too. Where
+    // it is not, a chain reaching above the certificate terminates outside the
+    // anchor set and is refused as ISSUER_UNTRUSTED long before (o) is reached.
+    //
+    // Asserted as two sets rather than one because the remedies differ: a new
+    // OID among the rejected is chains that validated yesterday failing today,
+    // while a new one among the exempt is news about the lists that costs no
+    // deployment anything until that issuer is published.
+    const criticalAndRejected = new Set<string>();
+    const criticalAndExempt = new Set<string>();
+    for (const { certificate, oids } of withUnreadCriticalExtensions) {
+      // Self-issued is excluded: a root matching itself is still only ever the
+      // top of a chain, which is the exempt case rather than the rejected one.
+      const belowAnAnchor = anchors.some((anchor) => {
+        if (!anchor.ca || anchor.raw.equals(certificate.raw)) return false;
+        try {
+          return certificate.checkIssued(anchor);
+        } catch {
+          return false;
+        }
+      });
+      for (const oid of oids) (belowAnAnchor ? criticalAndRejected : criticalAndExempt).add(oid);
+    }
+
     // Reported rather than asserted: a service that identifies itself by
     // subject name and key identifier instead of by certificate gives us no key
     // to anchor at, so it is correctly absent — but the number moving is worth
@@ -403,6 +442,19 @@ describe('the live trusted lists', { skip }, () => {
       `${servicesWithQualifications} granted services publish Qualifications, using ` +
         `${publishedQualifiers.size} distinct qualifier URIs; ` +
         `${serviceInformationUris.size} distinct AdditionalServiceInformation URIs`,
+    );
+
+    // Named rather than counted: when one of the assertions below goes red, the
+    // certificate is what somebody has to go and read.
+    t.diagnostic(
+      `${withUnreadCriticalExtensions.length} certificates carry a critical extension this project does not process: ` +
+        withUnreadCriticalExtensions
+          .map(({ certificate, oids }) => {
+            const lines = certificate.subject.split('\n');
+            const name = lines.find((line) => line.startsWith('CN=')) ?? lines.at(-1);
+            return `${name} (${oids.join(', ')})`;
+          })
+          .join('; '),
     );
 
     // Bounds, not exact counts: these lists change continuously and an exact
@@ -470,11 +522,20 @@ describe('the live trusted lists', { skip }, () => {
     );
 
     assert.deepEqual(
-      [...criticalAndRejected],
+      [...criticalAndRejected].sort(),
       ['2.5.29.16'],
       news(
-        `The critical extensions this project does not process are now [${[...criticalAndRejected].join(', ')}], not [2.5.29.16 privateKeyUsagePeriod].`,
+        `The critical extensions this project does not process, on certificates that sit BELOW an anchor, are now [${[...criticalAndRejected].sort().join(', ')}], not [2.5.29.16 privateKeyUsagePeriod].`,
         'RFC 5280 §6.1.4 (o) is enforced, so this list is no longer a gap to be bounded — it is the set of certificates a deployment now REJECTS. A new OID here means chains that validated yesterday stop validating: decide whether to process that extension, and correct the measurement in REPRODUCE.md either way.',
+      ),
+    );
+
+    assert.deepEqual(
+      [...criticalAndExempt].sort(),
+      ['1.3.6.1.5.5.7.1.3'],
+      news(
+        `The critical extensions this project does not process, on certificates that can only ever BE an anchor, are now [${[...criticalAndExempt].sort().join(', ')}], not [1.3.6.1.5.5.7.1.3 qcStatements].`,
+        'nothing is rejected: §6.1.4 (o) exempts the anchor, and the issuers of these certificates are on no trusted list, so no chain can put them below one. This is the cheaper half of the same measurement and it is recorded separately for exactly that reason — the day one of these issuers is published, the OID moves to the assertion above and becomes a rejection. Update the measurement in REPRODUCE.md, and check whether the extension is now worth processing.',
       ),
     );
 

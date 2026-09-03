@@ -722,7 +722,7 @@ rule turns into decoration. Eleven OIDs: `basicConstraints`, `keyUsage`,
 Two of those are processed *conditionally*, and saying so is the point of
 listing them: `extKeyUsage` is enforced against the caller's
 `requiredExtendedKeyUsage`, unset by default — §4.2.1.12 leaves the purpose
-check to the application in exactly that way, and 1002 certificates on the live
+check to the application in exactly that way, and 1015 certificates on the live
 lists mark it critical, so a verifier rejecting them would be enforcing the rule
 by refusing eIDAS. `cRLDistributionPoints` and `authorityInfoAccess` are read to
 find a CRL or a responder, which fails closed, but only while
@@ -734,6 +734,12 @@ and malformed under another makes this rejection unreproducible.
 `subjectDirectoryAttributes` and `freshestCRL` are absent on purpose. RFC 5280
 requires all five to be non-critical, so a critical one is a non-conforming
 certificate and rejecting it is the rule working rather than a gap in it.
+`qcStatements` (RFC 3739 §3.2.6) is absent for the other reason: it is
+conforming, and three CA certificates on the Irish list mark it critical, but
+ETSI EN 319 412-5 statements *assert* that the subject is qualified rather than
+narrowing what the certificate may be used for. There is no outcome here for it
+to change, and an OID added for being expected is how this rule becomes
+decoration.
 
 **The trust anchor is exempt.** §6.1 never processes it as a certificate — it
 supplies the initial state, and the loop (o) belongs to runs over the
@@ -744,14 +750,25 @@ Same rule as everywhere else here: constraints bind, assertions do not. An
 anchor is trusted because an operator pinned it or a Member State published it,
 not because every field on it was understood.
 
-Measured on 2026-08-12 (REPRODUCE.md): six extensions are ever marked critical
-across the live trusted lists, and exactly one is outside the set —
-`privateKeyUsagePeriod` (RFC 3280 §4.2.1.4, dropped from RFC 5280), on four
-certificates. So turning this rule on costs four certificates today, none of
-them in the reference deployment: the EU PID document signer and its CA mark
-only `basicConstraints` and `keyUsage` critical, and a test pins that against
-the committed real credential. Before certificate policies were implemented the
-same measurement was 78, which is most of why they came first.
+Measured on 2026-09-03 (REPRODUCE.md): seven extensions are ever marked critical
+across the live trusted lists, and two are outside the set —
+`privateKeyUsagePeriod` on four certificates and `qcStatements` on three. Only
+the first four cost anything. **The anchor exemption is what separates them**:
+every certificate on a trusted list is an anchor, so an unread critical
+extension on one is free until the certificate can appear *below* an anchor,
+which needs its own issuer to be published too. The four `privateKeyUsagePeriod`
+certificates are Icelandic time-stamping certificates issued by a CA that is
+itself on the Icelandic list, so a chain through one is refused; the three
+`qcStatements` CAs are Irish and their root is on no list at all, so no chain
+can put them anywhere but the top. The drift test asserts the two sets
+separately, because a new OID among the first is chains that validated yesterday
+failing today and a new one among the second is not.
+
+Nothing in the reference deployment is affected either way: the EU PID document
+signer and its CA mark only `basicConstraints` and `keyUsage` critical, and a
+test pins that against the committed real credential. Before certificate
+policies were implemented the same measurement was 78, which is most of why they
+came first.
 
 The rejection is `ISSUER_EXTENSION_UNRECOGNISED`, kept distinct from
 `ISSUER_UNTRUSTED` because the distinction is the useful part: nothing is known
