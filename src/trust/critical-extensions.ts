@@ -51,7 +51,7 @@ import type { X509Certificate } from 'node:crypto';
  *    default. RFC 5280 §4.2.1.12 leaves the purpose check to the application
  *    in exactly this way — §6.1 does not process EKU at all — so the hook is
  *    the processing. It is also the one entry where the alternative is not
- *    arguable: 1002 certificates on the live trusted lists mark EKU critical
+ *    arguable: 1015 certificates on the live trusted lists mark EKU critical
  *    (REPRODUCE.md), and a verifier that rejected all of them would be
  *    enforcing the rule by refusing eIDAS.
  *  - `cRLDistributionPoints` and `authorityInfoAccess` are read by
@@ -65,14 +65,25 @@ import type { X509Certificate } from 'node:crypto';
  * are the whole of the conditionality.
  *
  * Absent on purpose: `subjectKeyIdentifier`, `authorityKeyIdentifier`,
- * `issuerAltName`, `subjectDirectoryAttributes`, `freshestCRL` and
- * `privateKeyUsagePeriod`. RFC 5280 requires the first five to be
- * non-critical, so a critical one is non-conforming and rejecting it is the
- * rule working. `privateKeyUsagePeriod` is the sixth (RFC 3280 §4.2.1.4,
- * dropped from RFC 5280) and the only unrecognised critical extension in use
- * anywhere on the live trusted lists — four certificates, measured
- * 2026-08-12. That number is what this rule costs today, and
- * `test/ecosystem-drift.test.ts` re-measures it.
+ * `issuerAltName`, `subjectDirectoryAttributes`, `freshestCRL`,
+ * `privateKeyUsagePeriod` and `qcStatements`. RFC 5280 requires the first five
+ * to be non-critical, so a critical one is non-conforming and rejecting it is
+ * the rule working. The last two are the only unrecognised critical extensions
+ * in use anywhere on the live trusted lists, and they are absent for different
+ * reasons (measured 2026-09-03, re-measured by `test/ecosystem-drift.test.ts`):
+ *
+ *  - `privateKeyUsagePeriod` (RFC 3280 §4.2.1.4, dropped from RFC 5280), on
+ *    four Icelandic time-stamping certificates whose issuer is itself on a
+ *    trusted list. Those four are what this rule costs today: they sit below an
+ *    anchor, so §6.1.4 (o) reaches them and a chain through one is refused.
+ *  - `qcStatements` (RFC 3739 §3.2.6), on three Irish CA certificates since
+ *    late August 2026. It is not here because it states nothing this library
+ *    decides — ETSI EN 319 412-5 statements assert that the subject is
+ *    qualified, they do not narrow what the certificate may be used for, and
+ *    adding an OID for being expected is how §6.1.4 (o) becomes decoration.
+ *    It costs nothing either way: those three are trust anchors whose own
+ *    issuer is on no list, and the anchor is exempt (see
+ *    `checkCriticalExtensions` in `issuer-key.ts`).
  */
 export const RECOGNISED_CRITICAL_EXTENSIONS: ReadonlySet<string> = new Set([
   // Path validation proper (§6.1.3, §6.1.4).

@@ -576,6 +576,8 @@ bounded but the set of certificates a deployment **rejects**, which is why
 were outside the set before certificate policies were implemented, which is most
 of why those came first.
 
+That last claim was too strong, and the re-measurement below is where it broke.
+
 The same pass over the two committed real credentials confirms the reference
 deployment is unaffected — `PID DS - 002` and `PID Issuer CA - UT 02` mark only
 `basicConstraints` and `keyUsage` critical, for the SD-JWT VC and the mdoc
@@ -592,6 +594,92 @@ PID DS - 002   2.5.29.19* 2.5.29.35 1.3.6.1.5.5.7.1.1 2.5.29.32 2.5.29.37
 
 `test/critical-extensions.test.ts` pins that against the committed fixtures, so
 it is checked offline on every run rather than only when the drift test does.
+
+### A second unrecognised critical extension, and what it cost, 2026-09-03
+
+The weekly drift run went red on 2026-08-31, having been green on 2026-08-24: a
+second OID had appeared outside `RECOGNISED_CRITICAL_EXTENSIONS`. Re-measured
+across all 31 reachable lists, 2506 certificates:
+
+```
+$ node -e "…every certificate on every national list, every extension's
+           critical flag, against RECOGNISED_CRITICAL_EXTENSIONS…"
+
+extensions ever marked critical, with how many certificates mark them:
+  2.5.29.15          keyUsage               2281   recognised
+  2.5.29.19          basicConstraints       1727   recognised
+  2.5.29.37          extendedKeyUsage       1015   recognised
+  2.5.29.32          certificatePolicies      72   recognised
+  2.5.29.36          policyConstraints         6   recognised
+  2.5.29.16          privateKeyUsagePeriod     4   UNREAD
+  1.3.6.1.5.5.7.1.3  qcStatements              3   UNREAD
+```
+
+The three are Irish, all CAs, all issued by the same root:
+
+```
+[IE] Entaksi Qualified Time-stamps CA G1
+[IE] Entaksi Qualified Electronic Signatures CA G1
+[IE] Entaksi Qualified Electronic Seals CA G1
+     issuer: CN=Entaksi QTSP Root CA G1, O=Entaksi Solutions SpA, C=IT
+```
+
+What they assert, decoded from the extension (ETSI EN 319 412-5, and EN 319 422
+for the last, which only the time-stamping CA carries):
+
+```
+0.4.0.1862.1.1   QcCompliance          — an EU qualified certificate
+0.4.0.1862.1.3   QcRetentionPeriod     — 14 years
+0.4.0.1862.1.4   QcSSCD                — the key is in a QSCD
+0.4.0.1862.1.5   QcPDS                 — https://r.entaksi.net/oids/… (en)
+0.4.0.19422.1    esi4-qtstStatement-1  — qualified time-stamps
+```
+
+**This costs nothing, and the reason is the anchor exemption.** §6.1.4 (o) never
+runs on the trust anchor — every certificate measured here *is* one, because it
+was published on a trusted list — so an unread critical extension is free until
+the certificate can appear **below** an anchor in a presented chain, and that
+needs its own issuer to be on a list too. Checked directly:
+
+```
+$ node -e "…for each certificate carrying an unread critical extension, is any
+           CA on any list its issuer?…"
+
+1.3.6.1.5.5.7.1.3 [IE] Entaksi Qualified Time-stamps CA G1           -> NO
+1.3.6.1.5.5.7.1.3 [IE] Entaksi Qualified Electronic Signatures CA G1 -> NO
+1.3.6.1.5.5.7.1.3 [IE] Entaksi Qualified Electronic Seals CA G1      -> NO
+2.5.29.16         [IS] Signet TSA 2022  -> [IS] Fullgilt audkenni 2021
+2.5.29.16         [IS] Signet TSA 2023  -> [IS] Fullgilt audkenni 2021
+2.5.29.16         [IS] Signet TSA 2024  -> [IS] Fullgilt audkenni 2021
+2.5.29.16         [IS] Signet TSA 2025  -> [IS] Fullgilt audkenni 2021
+```
+
+Entaksi's root is on no list, so a chain reaching above one of the three
+terminates outside the anchor set and is refused as `ISSUER_UNTRUSTED` long
+before (o) is reached; stopping at one of them makes it the anchor, which is
+exempt. The four Icelandic certificates are the opposite case and remain the
+whole cost of this rule: their issuer is published beside them, so they really
+do sit below an anchor and a chain through one really is rejected.
+
+**`qcStatements` was not added to the recognised set.** The membership rule is
+*this library reads the extension and lets it change an outcome*, and there is
+no outcome here for it to change: EN 319 412-5 statements assert that the
+subject is qualified, they do not narrow what the certificate may be used for.
+Adding an OID because it is conforming and expected is precisely how §6.1.4 (o)
+turns into decoration — the module says so about itself. Whether a certificate
+is qualified is answered elsewhere and by a different mechanism: the trusted
+list's `Qualifications`, evaluated per end-entity certificate and **derived,
+never enforced** (README "Qualifiers and service extensions").
+
+The measurement above is what the earlier section got wrong, and the drift test
+now records both halves rather than one. It asserted a single set while its
+failure message called it "the set of certificates a deployment now REJECTS",
+which conflated *published on a list* with *rejected*; this is the first drift
+that separated them. `ecosystem-drift.test.ts` now asserts
+`criticalAndRejected` (`['2.5.29.16']`) and `criticalAndExempt`
+(`['1.3.6.1.5.5.7.1.3']`) separately, with different instructions, because the
+day Entaksi's root is published the OID moves from the second to the first and
+that is a real regression rather than news.
 
 ### Qualifiers and service information extensions, 2026-08-14
 
