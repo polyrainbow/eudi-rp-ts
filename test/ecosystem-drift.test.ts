@@ -252,13 +252,33 @@ describe('the live trusted lists', { skip }, () => {
     for (const pointer of pointers) {
       let xml: string;
       try {
-        xml = await (await fetch(pointer.url)).text();
+        const response = await fetch(pointer.url);
+        if (!response.ok) {
+          unreachable.push(`${pointer.territory} (HTTP ${response.status})`);
+          continue;
+        }
+        xml = await response.text();
       } catch {
-        unreachable.push(pointer.territory);
+        unreachable.push(`${pointer.territory} (fetch failed)`);
         continue;
       }
 
-      const document = new DOMParser().parseFromString(xml, 'text/xml');
+      // A server that answers is not necessarily serving the list: a CDN's
+      // "Access Denied" page arrives as HTML, which xmldom throws on, and that
+      // took the whole run down on 2026-10-26. It is the same news as a failed
+      // fetch — this week's network, not the published lists — so it is counted
+      // the same way, and the anchor bound below still catches a collapse.
+      let document: ReturnType<InstanceType<typeof DOMParser>['parseFromString']>;
+      try {
+        document = new DOMParser().parseFromString(xml, 'text/xml');
+      } catch (error) {
+        unreachable.push(`${pointer.territory} (not XML: ${(error as Error).message})`);
+        continue;
+      }
+      if (document.documentElement?.localName !== 'TrustServiceStatusList') {
+        unreachable.push(`${pointer.territory} (not a trusted list: <${document.documentElement?.localName ?? '?'}>)`);
+        continue;
+      }
 
       // `parseXml` refuses a document type declaration that could carry an
       // entity, which is only free of cost while no Member State publishes one.
