@@ -239,9 +239,10 @@ describe('the live trusted lists', { skip }, () => {
     const unbounded: string[] = [];
     const lapsed: string[] = [];
     const unimplementedForms = new Set<string>();
-    const withUnreadCriticalExtensions: { certificate: X509Certificate; oids: string[] }[] = [];
+    const withUnreadCriticalExtensions: { certificate: X509Certificate; oids: string[]; territory: string }[] = [];
     const anchors: X509Certificate[] = [];
     const unreachable: string[] = [];
+    const read = new Set<string>();
     const withDoctype: string[] = [];
     const criticalServiceExtensions = new Set<string>();
     const serviceExtensionsRefused: string[] = [];
@@ -290,6 +291,7 @@ describe('the live trusted lists', { skip }, () => {
         withDoctype.push(`${pointer.territory} (${doctype.name})`);
         continue;
       }
+      read.add(pointer.territory);
 
       // Freshness, read straight from the document for the same reason as the
       // rest of this loop: what the parser accepted and what is published are
@@ -373,7 +375,7 @@ describe('the live trusted lists', { skip }, () => {
           }
         }
         if (unread.length > 0) {
-          withUnreadCriticalExtensions.push({ certificate: entry.certificate, oids: unread });
+          withUnreadCriticalExtensions.push({ certificate: entry.certificate, oids: unread, territory: pointer.territory });
         }
 
         // Certificate policies, read on every certificate rather than only the
@@ -441,6 +443,30 @@ describe('the live trusted lists', { skip }, () => {
       for (const oid of oids) (belowAnAnchor ? criticalAndRejected : criticalAndExempt).add(oid);
     }
 
+    // Some expectations below are not "nothing" but a specific finding, and each
+    // finding is published by one Member State. Absence is evidence only where
+    // we looked: with that list unreachable, the finding is not gone but
+    // unmeasured, and failing would report a change in the EU deployment that
+    // is really a bad week for one server. So an expected value is dropped only
+    // when the list publishing it was not read and the value did not turn up
+    // anyway — a value nobody expected still fails from any territory, and one
+    // missing from a list that was read is still news.
+    const unmeasured: string[] = [];
+    const expectWhereRead = (expected: [value: string, territory: string][], observed: Iterable<string>) => {
+      const seen = new Set(observed);
+      return expected
+        .filter(([value, territory]) => {
+          if (read.has(territory) || seen.has(value)) return true;
+          unmeasured.push(`${value} (published by ${territory})`);
+          return false;
+        })
+        .map(([value]) => value)
+        .sort();
+    };
+    const expectedRejected = expectWhereRead([['2.5.29.16', 'IS']], criticalAndRejected);
+    const expectedExempt = expectWhereRead([['1.3.6.1.5.5.7.1.3', 'IE']], criticalAndExempt);
+    const expectedUnbounded = expectWhereRead([['UK', 'UK']], unbounded);
+
     // Reported rather than asserted: a service that identifies itself by
     // subject name and key identifier instead of by certificate gives us no key
     // to anchor at, so it is correctly absent — but the number moving is worth
@@ -476,6 +502,12 @@ describe('the live trusted lists', { skip }, () => {
           })
           .join('; '),
     );
+
+    // Said every run it happens rather than only on failure: an expectation
+    // that went unchecked is the one gap a green build here does not show.
+    if (unmeasured.length > 0) {
+      t.diagnostic(`not measured this run, because the list publishing it was unreachable: ${unmeasured.join('; ')}`);
+    }
 
     // Bounds, not exact counts: these lists change continuously and an exact
     // figure would fail every week for no reason.
@@ -543,7 +575,7 @@ describe('the live trusted lists', { skip }, () => {
 
     assert.deepEqual(
       [...criticalAndRejected].sort(),
-      ['2.5.29.16'],
+      expectedRejected,
       news(
         `The critical extensions this project does not process, on certificates that sit BELOW an anchor, are now [${[...criticalAndRejected].sort().join(', ')}], not [2.5.29.16 privateKeyUsagePeriod].`,
         'RFC 5280 §6.1.4 (o) is enforced, so this list is no longer a gap to be bounded — it is the set of certificates a deployment now REJECTS. A new OID here means chains that validated yesterday stop validating: decide whether to process that extension, and correct the measurement in REPRODUCE.md either way.',
@@ -552,7 +584,7 @@ describe('the live trusted lists', { skip }, () => {
 
     assert.deepEqual(
       [...criticalAndExempt].sort(),
-      ['1.3.6.1.5.5.7.1.3'],
+      expectedExempt,
       news(
         `The critical extensions this project does not process, on certificates that can only ever BE an anchor, are now [${[...criticalAndExempt].sort().join(', ')}], not [1.3.6.1.5.5.7.1.3 qcStatements].`,
         'nothing is rejected: §6.1.4 (o) exempts the anchor, and the issuers of these certificates are on no trusted list, so no chain can put them below one. This is the cheaper half of the same measurement and it is recorded separately for exactly that reason — the day one of these issuers is published, the OID moves to the assertion above and becomes a rejection. Update the measurement in REPRODUCE.md, and check whether the extension is now worth processing.',
@@ -586,8 +618,8 @@ describe('the live trusted lists', { skip }, () => {
     // defensible only while the set it costs is the unmaintained ones. On
     // 2026-08-12 it was exactly the United Kingdom's, frozen at 2020-12-31.
     assert.deepEqual(
-      unbounded,
-      ['UK'],
+      [...unbounded].sort(),
+      expectedUnbounded,
       news(
         `Lists declaring no NextUpdate are now [${unbounded.join(', ') || 'none'}], not [UK].`,
         'each of those territories has just dropped out of the anchor set. If a maintained list has stopped declaring one, the "costs one defunct list" argument in src/trust/lotl.ts no longer holds and the rule needs revisiting; if UK has vanished from the LOTL instead, only this expectation is stale.',
